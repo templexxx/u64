@@ -4,7 +4,9 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/templexxx/cpu"
+	"github.com/zeebo/xxh3"
 )
 
 const (
@@ -23,6 +25,16 @@ const (
 	neighOffMask  = 1<<neighOffBits - 1
 )
 
+// hash function for bucket0.
+var hashFunc0 = func(b []byte) uint64 {
+	return xxh3.Hash(b) // xxh3 is prefect bijective for 8bytes and blazing fast.
+}
+
+// hash function for bucket1.
+var hashFunc1 = func(b []byte) uint64 {
+	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
+}
+
 // Set is unsigned 64-bit integer set.
 // Supports one write goroutine and multi read goroutines at the same time.
 // Read is wait-free.
@@ -34,10 +46,6 @@ type Set struct {
 	// | bkt1_size(31) | bkt0_size(31) | status(2) |
 	header    uint64
 	_padding1 [cpu.X86FalseSharingRange]byte
-
-	// insertOnly is the Set global insert configuration.
-	// When it's true, new object with the same hashing will be failed to insert.
-	insertOnly bool
 
 	// buckets are the containers of entries.
 	//
@@ -56,21 +64,21 @@ type Set struct {
 }
 
 // New creates a new Set.
-// sizeHint gives the hint of set capacity.
-func New(sizeHint int) *Set {
+// size gives the hint size of set capacity, it's maximum size of the set.
+func New(size int) *Set {
 
-	size := sizeHint / 3 * 4 // load factor 0.75.
-	size = size >> 6 << 6    // Multiple of 64(neighborhood size).
+	n := size / 3 * 4 // load factor 0.75.
+	n = n >> 6 << 6   // Multiple of 64(neighborhood size).
 
-	if size < 256 {
-		size = 256
+	if n < 256 {
+		n = 256
 	}
-	if size > maxEntries {
-		size = maxEntries
+	if n > maxEntries {
+		n = maxEntries
 	}
 
-	h := uint64(size) << 0
-	bkt0 := make([]uint64, size)
+	h := uint64(n) << 0
+	bkt0 := make([]uint64, n) // Create one bucket at the beginning.
 
 	return &Set{
 		header:  h,
@@ -78,26 +86,24 @@ func New(sizeHint int) *Set {
 	}
 }
 
-// insert inserts entry to index.
+// Insert inserts entry to index.
 // Return nil if succeed.
 //
 // There will be only one goroutine tries to insert.
 // (both of insert and delete use the same goroutine)
-func (ix *Set) insert(digest, addr uint32) error {
+func (s *Set) Insert(key uint64) error {
 
-	return ix.tryInsert(uint64(digest), uint64(addr), ix.insertOnly)
+	return s.tryInsert(key)
 }
 
 var (
-	ErrDigestConflict = errors.New("digest conflicted")
-	ErrIndexFull      = errors.New("index is full")
-	ErrNotFound       = errors.New("not found")
+	ErrNoNeigh  = errors.New("no neighbour for insertion")
+	ErrIsFull   = errors.New("set is full")
+	ErrNotFound = errors.New("not found")
 )
 
-// tryInsert tries to insert entry to index.
-// Set insertOnly false if you want to replace the older entry,
-// it's useful in test and extent GC process.
-func (ix *Set) tryInsert(digest, addr uint64, insertOnly bool) (err error) {
+// tryInsert tries to insert entry.
+func (s *Set) tryInsert(key uint64) (err error) {
 
 	bkt := digest & bktMask
 
@@ -106,7 +112,7 @@ func (ix *Set) tryInsert(digest, addr uint64, insertOnly bool) (err error) {
 
 	// TODO use SIMD
 	for i := 0; i < neighbour && bkt+uint64(i) < bktCnt; i++ {
-		entry := atomic.LoadUint64(&ix.buckets[bkt+uint64(i)])
+		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
 		if entry == 0 {
 			if i < bktOff {
 				bktOff = i
@@ -116,7 +122,7 @@ func (ix *Set) tryInsert(digest, addr uint64, insertOnly bool) (err error) {
 		d := entry >> digestShift & keyMask
 		if d == digest {
 			if insertOnly {
-				return ErrDigestConflict
+				return ErrNoNeigh
 			} else {
 				bktOff = i
 				break
@@ -124,23 +130,23 @@ func (ix *Set) tryInsert(digest, addr uint64, insertOnly bool) (err error) {
 		}
 	}
 
-	// 2. Try to insert within neighbour
+	// 2. Try to Insert within neighbour
 	if bktOff < neighbour { // There is bktOff bucket within neighbour.
 		entry := uint64(bktOff)<<neighOffShift | digest<<digestShift | addr
-		atomic.StoreUint64(&ix.buckets[bkt+uint64(bktOff)], entry)
+		atomic.StoreUint64(&s.buckets[bkt+uint64(bktOff)], entry)
 		return nil
 	}
 
 	// 3. Linear probe to find an empty bucket and swap.
 	j := bkt + neighbour
 	for {
-		free, ok := ix.exchange(j)
+		free, ok := s.exchange(j)
 		if !ok {
-			return ErrIndexFull
+			return ErrIsFull
 		}
 		if free-bkt < neighbour {
 			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
-			atomic.StoreUint64(&ix.buckets[free], entry)
+			atomic.StoreUint64(&s.buckets[free], entry)
 			return nil
 		}
 		j = free
@@ -148,15 +154,15 @@ func (ix *Set) tryInsert(digest, addr uint64, insertOnly bool) (err error) {
 }
 
 // exchange exchanges the empty slot and the another one (closer to the bucket we want).
-func (ix *Set) exchange(start uint64) (uint64, bool) {
+func (s *Set) exchange(start uint64) (uint64, bool) {
 
 	for i := start; i < bktCnt; i++ {
-		if atomic.LoadUint64(&ix.buckets[i]) == 0 { // Find a free one.
+		if atomic.LoadUint64(&s.buckets[i]) == 0 { // Find a free one.
 			for j := i - neighbour + 1; j < i; j++ { // Search forward.
-				entry := atomic.LoadUint64(&ix.buckets[j])
+				entry := atomic.LoadUint64(&s.buckets[j])
 				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
-					atomic.StoreUint64(&ix.buckets[i], entry)
-					atomic.StoreUint64(&ix.buckets[j], 0)
+					atomic.StoreUint64(&s.buckets[i], entry)
+					atomic.StoreUint64(&s.buckets[j], 0)
 
 					return j, true
 				}
@@ -169,13 +175,13 @@ func (ix *Set) exchange(start uint64) (uint64, bool) {
 
 // TODO add cuckoo filter.
 // There are multi goroutines try to search.
-func (ix *Set) search(digest uint32) (addr uint32, err error) {
+func (s *Set) search(digest uint32) (addr uint32, err error) {
 
 	bkt := uint64(digest) & bktMask
 
 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
 
-		entry := atomic.LoadUint64(&ix.buckets[bkt+uint64(i)])
+		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
 
 		if entry>>digestShift&keyMask == uint64(digest) {
 			deleted := entry >> deletedShift & deletedMask
@@ -191,12 +197,12 @@ func (ix *Set) search(digest uint32) (addr uint32, err error) {
 	return 0, ErrNotFound
 }
 
-func (ix *Set) delete(digest uint32) {
+func (s *Set) delete(digest uint32) {
 	bkt := uint64(digest) & bktMask
 
 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
 
-		entry := atomic.LoadUint64(&ix.buckets[bkt+uint64(i)])
+		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
 		if entry>>digestShift&keyMask == uint64(digest) {
 			deleted := entry >> deletedShift & deletedMask
 			if deleted == 1 { // Deleted.
@@ -204,7 +210,7 @@ func (ix *Set) delete(digest uint32) {
 			}
 			a := uint64(1) << deletedShift
 			entry = entry | a
-			atomic.StoreUint64(&ix.buckets[bkt+uint64(i)], entry)
+			atomic.StoreUint64(&s.buckets[bkt+uint64(i)], entry)
 		}
 	}
 }
