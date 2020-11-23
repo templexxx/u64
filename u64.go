@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	maxEntries = 2 ^ 28 // 256M * 8 Byte = 2GB.
+	MaxEntries = 2 ^ 25 // 32M * 8 Byte = 256MB.
 )
 
 const (
@@ -58,13 +58,14 @@ type Set struct {
 	// P is the probability a hopscotch hash table with load factor 0.75
 	// and the neighborhood size 64 must be rehashed:
 	// 7.95e-98 < P < 1e-8
-	// It's good enough, almost impossible.
+	// It's good enough, almost impossible for MaxEntries.
 	// If there is no place to set key, try to resize to another bucket.
 	buckets [2][]uint64
 }
 
 // New creates a new Set.
-// size gives the hint size of set capacity, it's maximum size of the set.
+// size gives the hint size of set capacity, it's maximum size of the set,
+// insertion will grow the size if needed.
 func New(size int) *Set {
 
 	n := size / 3 * 4 // load factor 0.75.
@@ -73,8 +74,8 @@ func New(size int) *Set {
 	if n < 256 {
 		n = 256
 	}
-	if n > maxEntries {
-		n = maxEntries
+	if n > MaxEntries {
+		n = MaxEntries
 	}
 
 	h := uint64(n) << 0
