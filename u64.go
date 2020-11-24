@@ -2,7 +2,7 @@ package u64
 
 import (
 	"errors"
-	"sync/atomic"
+	"math/bits"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/templexxx/cpu"
@@ -93,8 +93,8 @@ func New(size int) *Set {
 // There will be only one goroutine tries to insert.
 // (both of insert and Remove use the same goroutine)
 func (s *Set) Add(key uint64) error {
-
-	return s.tryAdd(key)
+	return nil
+	// return s.tryAdd(key)
 }
 
 var (
@@ -103,121 +103,129 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
-// tryAdd tries to add entry to specific bucket.
-func (s *Set) tryAdd(key uint64) (err error) {
+// // tryAdd tries to add entry to specific bucket.
+// func (s *Set) tryAdd(key uint64) (err error) {
+//
+// 	bkt := digest & bktMask
+//
+// 	// 1. Ensure digest is unique.
+// 	bktOff := neighbour // Bucket offset: free_bucket - hash_bucket.
+//
+// 	// TODO use SIMD
+// 	for i := 0; i < neighbour && bkt+uint64(i) < bktCnt; i++ {
+// 		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
+// 		if entry == 0 {
+// 			if i < bktOff {
+// 				bktOff = i
+// 			}
+// 			continue
+// 		}
+// 		d := entry >> digestShift & keyMask
+// 		if d == digest {
+// 			if insertOnly {
+// 				return ErrNoNeigh
+// 			} else {
+// 				bktOff = i
+// 				break
+// 			}
+// 		}
+// 	}
+//
+// 	// 2. Try to Add within neighbour
+// 	if bktOff < neighbour { // There is bktOff bucket within neighbour.
+// 		entry := uint64(bktOff)<<neighOffShift | digest<<digestShift | addr
+// 		atomic.StoreUint64(&s.buckets[bkt+uint64(bktOff)], entry)
+// 		return nil
+// 	}
+//
+// 	// 3. Linear probe to find an empty bucket and swap.
+// 	j := bkt + neighbour
+// 	for {
+// 		free, ok := s.exchange(j)
+// 		if !ok {
+// 			return ErrIsFull
+// 		}
+// 		if free-bkt < neighbour {
+// 			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
+// 			atomic.StoreUint64(&s.buckets[free], entry)
+// 			return nil
+// 		}
+// 		j = free
+// 	}
+// }
+//
+// // exchange exchanges the empty slot and the another one (closer to the bucket we want).
+// func (s *Set) exchange(start uint64) (uint64, bool) {
+//
+// 	for i := start; i < bktCnt; i++ {
+// 		if atomic.LoadUint64(&s.buckets[i]) == 0 { // Find a free one.
+// 			for j := i - neighbour + 1; j < i; j++ { // Search forward.
+// 				entry := atomic.LoadUint64(&s.buckets[j])
+// 				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
+// 					atomic.StoreUint64(&s.buckets[i], entry)
+// 					atomic.StoreUint64(&s.buckets[j], 0)
+//
+// 					return j, true
+// 				}
+// 			}
+// 			return 0, false // Can't find bucket for swapping. Table is full.
+// 		}
+// 	}
+// 	return 0, false
+// }
+//
+// // Has returns the key in set or not.
+// // There are multi goroutines try to Has.
+// func (s *Set) Has(key uint64) bool {
+//
+// 	bkt := uint64(digest) & bktMask
+//
+// 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
+//
+// 		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
+//
+// 		if entry>>digestShift&keyMask == uint64(digest) {
+// 			deleted := entry >> deletedShift & deletedMask
+// 			if deleted == 1 { // Deleted.
+// 				return 0, ErrNotFound
+// 			}
+// 			// entry maybe modified after atomic load.
+// 			// Check it after read from disk.
+// 			return uint32(entry & addrMask), nil
+// 		}
+// 	}
+//
+// 	return 0, ErrNotFound
+// }
+//
+// // Remove removes key in set.
+// func (s *Set) Remove(key uint64) {
+// 	bkt := uint64(digest) & bktMask
+//
+// 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
+//
+// 		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
+// 		if entry>>digestShift&keyMask == uint64(digest) {
+// 			deleted := entry >> deletedShift & deletedMask
+// 			if deleted == 1 { // Deleted.
+// 				return
+// 			}
+// 			a := uint64(1) << deletedShift
+// 			entry = entry | a
+// 			atomic.StoreUint64(&s.buckets[bkt+uint64(i)], entry)
+// 		}
+// 	}
+// }
+//
+// // List lists all keys in set.
+// func (s *Set) List() []uint64 {
+//
+// }
 
-	bkt := digest & bktMask
-
-	// 1. Ensure digest is unique.
-	bktOff := neighbour // Bucket offset: free_bucket - hash_bucket.
-
-	// TODO use SIMD
-	for i := 0; i < neighbour && bkt+uint64(i) < bktCnt; i++ {
-		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
-		if entry == 0 {
-			if i < bktOff {
-				bktOff = i
-			}
-			continue
-		}
-		d := entry >> digestShift & keyMask
-		if d == digest {
-			if insertOnly {
-				return ErrNoNeigh
-			} else {
-				bktOff = i
-				break
-			}
-		}
+func nextPower2(n uint64) uint64 {
+	if n <= 1 {
+		return 1
 	}
 
-	// 2. Try to Add within neighbour
-	if bktOff < neighbour { // There is bktOff bucket within neighbour.
-		entry := uint64(bktOff)<<neighOffShift | digest<<digestShift | addr
-		atomic.StoreUint64(&s.buckets[bkt+uint64(bktOff)], entry)
-		return nil
-	}
-
-	// 3. Linear probe to find an empty bucket and swap.
-	j := bkt + neighbour
-	for {
-		free, ok := s.exchange(j)
-		if !ok {
-			return ErrIsFull
-		}
-		if free-bkt < neighbour {
-			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
-			atomic.StoreUint64(&s.buckets[free], entry)
-			return nil
-		}
-		j = free
-	}
-}
-
-// exchange exchanges the empty slot and the another one (closer to the bucket we want).
-func (s *Set) exchange(start uint64) (uint64, bool) {
-
-	for i := start; i < bktCnt; i++ {
-		if atomic.LoadUint64(&s.buckets[i]) == 0 { // Find a free one.
-			for j := i - neighbour + 1; j < i; j++ { // Search forward.
-				entry := atomic.LoadUint64(&s.buckets[j])
-				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
-					atomic.StoreUint64(&s.buckets[i], entry)
-					atomic.StoreUint64(&s.buckets[j], 0)
-
-					return j, true
-				}
-			}
-			return 0, false // Can't find bucket for swapping. Table is full.
-		}
-	}
-	return 0, false
-}
-
-// Has returns the key in set or not.
-// There are multi goroutines try to Has.
-func (s *Set) Has(key uint64) bool {
-
-	bkt := uint64(digest) & bktMask
-
-	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-
-		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
-
-		if entry>>digestShift&keyMask == uint64(digest) {
-			deleted := entry >> deletedShift & deletedMask
-			if deleted == 1 { // Deleted.
-				return 0, ErrNotFound
-			}
-			// entry maybe modified after atomic load.
-			// Check it after read from disk.
-			return uint32(entry & addrMask), nil
-		}
-	}
-
-	return 0, ErrNotFound
-}
-
-// Remove removes key in set.
-func (s *Set) Remove(key uint64) {
-	bkt := uint64(digest) & bktMask
-
-	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-
-		entry := atomic.LoadUint64(&s.buckets[bkt+uint64(i)])
-		if entry>>digestShift&keyMask == uint64(digest) {
-			deleted := entry >> deletedShift & deletedMask
-			if deleted == 1 { // Deleted.
-				return
-			}
-			a := uint64(1) << deletedShift
-			entry = entry | a
-			atomic.StoreUint64(&s.buckets[bkt+uint64(i)], entry)
-		}
-	}
-}
-
-// List lists all keys in set.
-func (s *Set) List() []uint64 {
-
+	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
 }
