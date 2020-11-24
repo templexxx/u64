@@ -87,14 +87,14 @@ func New(size int) *Set {
 	}
 }
 
-// Insert inserts entry to index.
+// Add inserts entry to index.
 // Return nil if succeed.
 //
 // There will be only one goroutine tries to insert.
-// (both of insert and delete use the same goroutine)
-func (s *Set) Insert(key uint64) error {
+// (both of insert and Remove use the same goroutine)
+func (s *Set) Add(key uint64) error {
 
-	return s.tryInsert(key)
+	return s.tryAdd(key)
 }
 
 var (
@@ -103,8 +103,8 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
-// tryInsert tries to insert entry.
-func (s *Set) tryInsert(key uint64) (err error) {
+// tryAdd tries to add entry to specific bucket.
+func (s *Set) tryAdd(key uint64) (err error) {
 
 	bkt := digest & bktMask
 
@@ -131,7 +131,7 @@ func (s *Set) tryInsert(key uint64) (err error) {
 		}
 	}
 
-	// 2. Try to Insert within neighbour
+	// 2. Try to Add within neighbour
 	if bktOff < neighbour { // There is bktOff bucket within neighbour.
 		entry := uint64(bktOff)<<neighOffShift | digest<<digestShift | addr
 		atomic.StoreUint64(&s.buckets[bkt+uint64(bktOff)], entry)
@@ -174,9 +174,9 @@ func (s *Set) exchange(start uint64) (uint64, bool) {
 	return 0, false
 }
 
-// TODO add cuckoo filter.
-// There are multi goroutines try to search.
-func (s *Set) search(digest uint32) (addr uint32, err error) {
+// Has returns the key in set or not.
+// There are multi goroutines try to Has.
+func (s *Set) Has(key uint64) bool {
 
 	bkt := uint64(digest) & bktMask
 
@@ -198,7 +198,8 @@ func (s *Set) search(digest uint32) (addr uint32, err error) {
 	return 0, ErrNotFound
 }
 
-func (s *Set) delete(digest uint32) {
+// Remove removes key in set.
+func (s *Set) Remove(key uint64) {
 	bkt := uint64(digest) & bktMask
 
 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
@@ -214,4 +215,9 @@ func (s *Set) delete(digest uint32) {
 			atomic.StoreUint64(&s.buckets[bkt+uint64(i)], entry)
 		}
 	}
+}
+
+// List lists all keys in set.
+func (s *Set) List() []uint64 {
+
 }
