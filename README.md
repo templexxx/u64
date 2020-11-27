@@ -19,7 +19,7 @@ Unsigned 64-bit Integer Set in Go.
 
 1. The maximum element is 2^58-1, it's enough big for most cases. 
 
-2. The maximum size of set is 
+2. The maximum size of set is 32Mi, 
 
 ## Mathematics
 
@@ -45,3 +45,12 @@ The rate of each entry is not empty is 0.375.
 The neighbour size is 64.
 
 `P = 0.375^64 = 5.47e-28`
+
+## Performance Tuning
+
+### No Neighbour Bitmap
+
+AVX atomic & extra 100% overhead
+https://rigtorp.se/isatomic/
+
+Compare benchmark:

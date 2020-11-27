@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	MaxEntries = 2 ^ 25 // 32M * 8 Byte = 256MB.
+	defaultSize = 64 // Start with a small size, saving memory.
+	// 32M is enough big for most cases.
+	maxCap = 2 ^ 25 // 32M * 8 Byte = 256MB.
 )
 
 const (
@@ -58,15 +60,28 @@ type Set struct {
 	// P is the probability a hopscotch hash table with load factor 0.75
 	// and the neighborhood size 64 must be rehashed:
 	// 7.95e-98 < P < 1e-8
-	// It's good enough, almost impossible for MaxEntries.
+	// It's good enough, almost impossible for maxCap.
 	// If there is no place to set key, try to resize to another bucket.
+	// TODO using neigh_off to improving contains performance
 	buckets [2][]uint64
 }
 
+func NewFastSet(size, cap int) *Set {
+
+}
+
+func NewFullSet(size, cap int) *Set {
+
+}
+
 // New creates a new Set.
-// size gives the hint size of set capacity, it's maximum size of the set,
-// insertion will grow the size if needed.
-func New(size int) *Set {
+// size is the set size at the beginning,
+// cap is the maximum size in the whole set lifecycle.
+// Set will grow if no bucket to add until meet the cap.
+//
+// If size is zero, using defaultSize.
+// If cap is zero, using maxCap.
+func New(size, cap int) *Set {
 
 	n := size / 3 * 4 // load factor 0.75.
 	n = n >> 6 << 6   // Multiple of 64(neighborhood size).
@@ -74,8 +89,8 @@ func New(size int) *Set {
 	if n < 256 {
 		n = 256
 	}
-	if n > MaxEntries {
-		n = MaxEntries
+	if n > maxCap {
+		n = maxCap
 	}
 
 	h := uint64(n) << 0
@@ -95,6 +110,15 @@ func New(size int) *Set {
 func (s *Set) Add(key uint64) error {
 	return nil
 	// return s.tryAdd(key)
+}
+
+func (s *Set) Contains(key uint64) bool {
+
+	return false
+}
+
+func (s *Set) Remove(key uint64) {
+
 }
 
 var (
