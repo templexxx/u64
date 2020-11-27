@@ -56,6 +56,8 @@ type Set struct {
 	buckets [2][]uint64
 }
 
+// TODO aligned to 64bytes(cache line)
+
 // New creates a new Set.
 // size is the set size at the beginning,
 // cap is the maximum size in the whole set lifecycle.
@@ -176,6 +178,12 @@ var (
 // 	}
 // 	return 0, false
 // }
+
+// TODO Contains logic:
+// 1. VPBBROADCASTQ 8byte->32byte
+// 2. VPCMPEQQ
+// 3. VPTEST Y0, Y0
+//
 //
 // // Has returns the key in set or not.
 // // There are multi goroutines try to Has.
