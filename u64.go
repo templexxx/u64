@@ -2,7 +2,6 @@ package u64
 
 import (
 	"errors"
-	"math/bits"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/templexxx/cpu"
@@ -10,22 +9,13 @@ import (
 )
 
 const (
-	defaultSize = 64 // Start with a small size, saving memory.
-	// 32M is enough big for most cases.
-	maxCap = 2 ^ 25 // 32M * 8 Byte = 256MB.
+	minSize = 64 // Start with a minSize, saving memory(256B).
 )
 
-const (
-	neighOffBits = 6
-	keyBits      = 58
-)
+// TODO how to shrink space? (GC)
 
-const (
-	neighbour     = 1 << neighOffBits
-	neighOffShift = keyBits
-	keyMask       = 1<<keyBits - 1
-	neighOffMask  = 1<<neighOffBits - 1
-)
+// MaxCap is the maximum capacity of Set.
+const MaxCap = 2 ^ 25 // 32M * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
 
 // hash function for bucket0.
 var hashFunc0 = func(b []byte) uint64 {
@@ -60,18 +50,10 @@ type Set struct {
 	// P is the probability a hopscotch hash table with load factor 0.75
 	// and the neighborhood size 64 must be rehashed:
 	// 7.95e-98 < P < 1e-8
-	// It's good enough, almost impossible for maxCap.
+	// It's good enough, almost impossible for MaxCap.
 	// If there is no place to set key, try to resize to another bucket.
 	// TODO using neigh_off to improving contains performance
 	buckets [2][]uint64
-}
-
-func NewFastSet(size, cap int) *Set {
-
-}
-
-func NewFullSet(size, cap int) *Set {
-
 }
 
 // New creates a new Set.
@@ -79,18 +61,15 @@ func NewFullSet(size, cap int) *Set {
 // cap is the maximum size in the whole set lifecycle.
 // Set will grow if no bucket to add until meet the cap.
 //
-// If size is zero, using defaultSize.
-// If cap is zero, using maxCap.
-func New(size, cap int) *Set {
+// If size is zero, using minSize.
+// If cap is zero, using MaxCap.
+func New(size int) *Set {
 
 	n := size / 3 * 4 // load factor 0.75.
 	n = n >> 6 << 6   // Multiple of 64(neighborhood size).
 
-	if n < 256 {
-		n = 256
-	}
-	if n > maxCap {
-		n = maxCap
+	if n < minSize {
+		n = minSize
 	}
 
 	h := uint64(n) << 0
@@ -245,11 +224,3 @@ var (
 // func (s *Set) List() []uint64 {
 //
 // }
-
-func nextPower2(n uint64) uint64 {
-	if n <= 1 {
-		return 1
-	}
-
-	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
-}

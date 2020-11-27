@@ -17,9 +17,7 @@ Unsigned 64-bit Integer Set in Go.
 
 ## Limitation
 
-1. The maximum element is 2^58-1, it's enough big for most cases. 
-
-2. The maximum size of set is 32Mi, 
+1. The maximum size of set is 32Mi, big enough for most cases.
 
 ## Mathematics
 
