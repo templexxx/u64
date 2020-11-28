@@ -15,7 +15,7 @@ const (
 // TODO how to shrink space? (GC)
 
 // MaxCap is the maximum capacity of Set.
-const MaxCap = 2 ^ 25 // 32M * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
+var MaxCap = 2 ^ 25 // 32M * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
 
 // hash function for bucket0.
 var hashFunc0 = func(b []byte) uint64 {
@@ -57,6 +57,7 @@ type Set struct {
 }
 
 // TODO aligned to 64bytes(cache line)
+// TODO no shrink option
 
 // New creates a new Set.
 // size is the set size at the beginning,

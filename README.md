@@ -4,20 +4,57 @@ Unsigned 64-bit Integer Set in Go.
 
 >- **High Performance:**
 >
->   Supports one write goroutine and multi read goroutine at the same time. Read is wait-free and Cache-friendly.
+>   Read Optimized: Supports one write goroutine and multi read goroutine.
+>   Read is wait-free and Cache-friendly, which means only needs few atomic read sequentially.
 >   
 >- **Rich Features:**
 >
 >   Search, Insert, Delete, List
 >
->- **Saving memory:**
+>- **Low Overhead**
 >
 >   Although it can't compress digits, comparing other implementation which supports dynamically updating, it does save
 >   memory because there is no pointer. Each key needs about 10Bytes, overhead is 25%.
+>
+>- **Auto Scaling**
+>
+>   Shrinking automatically: If there is no new key for a long time(default: 2minutes), and the most part of buckets are
+>   garbage(default: 1/4 usage), the set will try to shrink.
+>
+>   Expand automatically: When meet ErrNoSpace, it'll trigger expanding. The size will grow up to 2x as before.
+>
+
+## Performance Tuning
+
+### No Neighbour Bitmap
+
+AVX atomic & extra 100% overhead
+https://rigtorp.se/isatomic/
+
+Compare benchmark:
+
+### Using TSC register to get timestamp
 
 ## Limitation
 
-1. The maximum size of set is 32Mi, big enough for most cases.
+1. The maximum size of set is 32Mi, but big enough for most cases. I set the limitation for avoiding unexpected memory
+usage.
+
+## Other Set Implementations
+
+### Tree
+
+We could make a Cache-friendly tree, but in Go, it's almost impossible to make an uint64 tree set without the pointer
+overhead, so the space cost is at least 2x.
+
+### Other Hash Set
+
+The overhead is matter in normal hash set, because of the bucket linker. And it's really hard to make it wait-free.
+
+### Others
+
+Actually the major issues are getting the balance of memory usage and performance. It's not a easy job, so I decide to
+do it by myself.
 
 ## Mathematics
 
@@ -44,11 +81,6 @@ The neighbour size is 64.
 
 `P = 0.375^64 = 5.47e-28`
 
-## Performance Tuning
+## Linkers
 
-### No Neighbour Bitmap
-
-AVX atomic & extra 100% overhead
-https://rigtorp.se/isatomic/
-
-Compare benchmark:
+### Atomic 16Bytes
