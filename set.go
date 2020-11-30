@@ -1,37 +1,24 @@
+// Key Concepts:
+// 1. Slot:
+// Entry container.
+// Neighbourhood:
+// Key could be found in slot which hashed to or next Neighbourhood - 1 slots.
+// Bucket:
+// It's a virtual struct made of neighbourhood slots.
+// Table:
+// An array of buckets.
 package u64
 
 import (
+	"encoding/binary"
 	"errors"
 	"math/bits"
+	"sync/atomic"
 	"time"
+	"unsafe"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/templexxx/cpu"
 	"github.com/zeebo/xxh3"
-)
-
-// TODO how to shrink space? (GC)
-
-// hash function for bucket0.
-var hashFunc0 = func(b []byte) uint64 {
-	return xxh3.Hash(b) // xxh3 is prefect bijective for 8bytes and blazing fast.
-}
-
-// hash function for bucket1.
-var hashFunc1 = func(b []byte) uint64 {
-	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
-}
-
-const (
-	// epoch is an Unix time.
-	// 2020-06-03T08:39:34.000+0800.
-	epoch     int64 = 1591144774
-	epochNano       = epoch * int64(time.Second)
-	// doom is the zai's max Unix time.
-	// It will reach the end after 136 years from epoch.
-	doom int64 = 5880040774 // epoch + 136 years (about 2^32 seconds).
-	// maxTS is the zai's max timestamp.
-	maxTS = uint32(doom - epoch)
 )
 
 const (
@@ -54,44 +41,36 @@ var (
 	MaxCap = defaultMaxCap
 )
 
-// neighbour is the hopscotch hash neighbour size.
-// loadFactor is the hash load factor.
+// neighbour is the hopscotch hash neighbourhood size.
 //
 // P is the probability a hopscotch hash table with load factor 0.75
-// and the neighborhood size 64 must be rehashed:
-// 7.95e-98 < P < 1e-8
+// and the neighborhood size 32 must be rehashed:
+// 3.81e-40 < P < 1e-4
 //
-// If there is no place to set key, try to resize to another bucket.
+// If there is no place to set key, try to resize to another bucket until meet MaxCap.
 const (
-	neighbour  = 64
-	loadFactor = 0.75
+	neighbour = 32
 )
 
-// TODO block until expand/shrink finishing.
 // Set is unsigned 64-bit integer set.
-// Supports one write goroutine and multi read goroutines at the same time.
-// Read is wait-free.
+// Lock-free Write & Wait-free Read.
 type Set struct {
 	// add_status struct(uint64):
 	// 64                       0
 	// <-------------------------
 	// | cnt(32) | last_add(32) |
 	//
-	// cnt: count of available keys
-	// last_add: timestamp of last add
+	// cnt: count of added keys.
+	// last_add: timestamp of last add.
 	addStatus uint64
-	// There is only one padding for avoiding false share.
-	// The memory area which needs to reduce cache pollution around it should have its own false sharing range,
-	// this padding just has responsibility of taking care of the cache next to it.
-	// Only one padding could save 128byte memory usage.
+	// _padding here for avoiding false share.
+	// cycle which under the addStatus won't be modified frequently, but read frequently.
 	_padding [cpu.X86FalseSharingRange]byte
 
-	// cycle is the container of entries,
+	// cycle is the container of tables,
 	// it's made of two uint64 slices,
-	// only one slice is writable at a certain time.
-	//
-	// It won't change frequently, no need to put a padding to avoid false sharing.
-	cycle [2]*[]uint64
+	// only the cycle[0] is writable at a certain time.
+	cycle [2]unsafe.Pointer
 }
 
 const (
@@ -100,9 +79,6 @@ const (
 	// total usage = Set struct + Set pointer + minCap * 8bytes = 152 + 8 + minCap * 8 = 176bytes
 	minCap = 2
 )
-
-// TODO aligned to 64bytes(cache line)
-// TODO no shrink option
 
 // New creates a new Set.
 // cap is the set capacity at the beginning,
@@ -120,14 +96,13 @@ func New(cap int) *Set {
 
 	cap = int(nextPower2(uint64(cap)))
 
-	h := uint64(n) << 0
-	bkt0 := make([]uint64, n) // Create one bucket at the beginning.
+	bkt0 := make([]uint64, cap, cap) // Create one bucket at the beginning.
 
 	return &Set{
-		cycleStatus: h,
-		cycle:       [2][]uint64{bkt0},
+		cycle: [2]unsafe.Pointer{unsafe.Pointer(&bkt0)},
 	}
 }
+
 func nextPower2(n uint64) uint64 {
 	if n <= 1 {
 		return 1
@@ -136,14 +111,26 @@ func nextPower2(n uint64) uint64 {
 	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
 }
 
-// Add inserts entry to index.
+const (
+	// epoch is an Unix time.
+	// 2020-06-03T08:39:34.000+0800.
+	epoch     int64 = 1591144774
+	epochNano       = epoch * int64(time.Second)
+	// doom is the zai's max Unix time.
+	// It will reach the end after 136 years from epoch.
+	doom int64 = 5880040774 // epoch + 136 years (about 2^32 seconds).
+	// maxTS is the zai's max timestamp.
+	maxTS = uint32(doom - epoch)
+)
+
+// Add adds key into Set.
 // Return nil if succeed.
 //
-// There will be only one goroutine tries to insert.
-// (both of insert and Remove use the same goroutine)
+// Warning:
+// There must be only one goroutine tries to Add at the same time
+// (both of insert and Remove must use the same goroutine).
 func (s *Set) Add(key uint64) error {
-	return nil
-	// return s.tryAdd(key)
+	return s.tryInsert(key)
 }
 
 func (s *Set) Contains(key uint64) bool {
@@ -161,81 +148,89 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
-// // tryAdd tries to add entry to specific bucket.
-// func (s *Set) tryAdd(key uint64) (err error) {
-//
-// 	bkt := digest & bktMask
-//
-// 	// 1. Ensure digest is unique.
-// 	bktOff := neighbour // Bucket offset: free_bucket - hash_bucket.
-//
-// 	// TODO use SIMD
-// 	for i := 0; i < neighbour && bkt+uint64(i) < bktCnt; i++ {
-// 		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
-// 		if entry == 0 {
-// 			if i < bktOff {
-// 				bktOff = i
-// 			}
-// 			continue
-// 		}
-// 		d := entry >> digestShift & keyMask
-// 		if d == digest {
-// 			if insertOnly {
-// 				return ErrNoNeigh
-// 			} else {
-// 				bktOff = i
-// 				break
-// 			}
-// 		}
-// 	}
-//
-// 	// 2. Try to Add within neighbour
-// 	if bktOff < neighbour { // There is bktOff bucket within neighbour.
-// 		entry := uint64(bktOff)<<neighOffShift | digest<<digestShift | addr
-// 		atomic.StoreUint64(&s.cycle[bkt+uint64(bktOff)], entry)
-// 		return nil
-// 	}
-//
-// 	// 3. Linear probe to find an empty bucket and swap.
-// 	j := bkt + neighbour
-// 	for {
-// 		free, ok := s.exchange(j)
-// 		if !ok {
-// 			return ErrIsFull
-// 		}
-// 		if free-bkt < neighbour {
-// 			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
-// 			atomic.StoreUint64(&s.cycle[free], entry)
-// 			return nil
-// 		}
-// 		j = free
-// 	}
-// }
-//
-// // exchange exchanges the empty slot and the another one (closer to the bucket we want).
-// func (s *Set) exchange(start uint64) (uint64, bool) {
-//
-// 	for i := start; i < bktCnt; i++ {
-// 		if atomic.LoadUint64(&s.cycle[i]) == 0 { // Find a free one.
-// 			for j := i - neighbour + 1; j < i; j++ { // Search forward.
-// 				entry := atomic.LoadUint64(&s.cycle[j])
-// 				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
-// 					atomic.StoreUint64(&s.cycle[i], entry)
-// 					atomic.StoreUint64(&s.cycle[j], 0)
-//
-// 					return j, true
-// 				}
-// 			}
-// 			return 0, false // Can't find bucket for swapping. Table is full.
-// 		}
-// 	}
-// 	return 0, false
-// }
+var hashFunc = func(k uint64) uint64 {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, k)
+	return xxh3.Hash(b)
+}
+
+func (s *Set) tryInsert(key uint64) (err error) {
+
+restart:
+	p := atomic.LoadPointer(&s.cycle[0])
+	bkts := *(*[]uint64)(p)
+	bktCnt := len(bkts)
+	mask := uint64(len(bkts) - 1)
+
+	h := hashFunc(key)
+
+	bkt := int(h & mask)
+
+	// 1. Ensure key is unique.
+	bktOff := neighbour // bktOff is the distance between avail bucket from bkt.
+	// TODO use SIMD
+	for i := 0; i < neighbour && bkt+i < bktCnt; i++ {
+		entry := atomic.LoadUint64(&bkts[bkt+i])
+		if entry == key {
+			return nil // If already contains, do nothing.
+		}
+		if entry == 0 {
+			if i < bktOff {
+				bktOff = i
+			}
+			continue
+		}
+	}
+
+	// 2. Try to Add within neighbour
+	if bktOff < neighbour { // There is bktOff bucket within neighbour.
+		if !atomic.CompareAndSwapUint64(&bkts[bkt+bktOff], 0, key) {
+			goto restart
+		}
+		return nil
+	}
+
+	// 3. Linear probe to find an empty bucket and swap.
+	j := bkt + neighbour
+	for {
+		free, ok := s.swap(j, bktCnt)
+		if !ok {
+			return ErrIsFull
+		}
+		if free-bkt < neighbour {
+			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
+			atomic.StoreUint64(&s.cycle[free], entry)
+			return nil
+		}
+		j = free
+	}
+}
+
+// swap exchanges the free bucket and the another one (within the neighbourhood with the bucket we want).
+// Return true if find one.
+func (s *Set) swap(start, bktCnt int, bkts []uint64) (int, bool) {
+
+	for i := start; i < bktCnt; i++ {
+		if atomic.LoadUint64(&bkts[i]) == 0 { // Find a free one.
+			for j := i - neighbour + 1; j < i; j++ { // Search forward.
+				entry := atomic.LoadUint64(&bkts[j])
+				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
+					atomic.StoreUint64(&s.cycle[i], entry)
+					atomic.StoreUint64(&s.cycle[j], 0)
+
+					return j, true
+				}
+			}
+			return 0, false // Can't find bucket for swapping. Table is full.
+		}
+	}
+	return 0, false
+}
 
 // TODO Contains logic:
-// 1. VPBBROADCASTQ 8byte->32byte
-// 2. VPCMPEQQ
-// 3. VPTEST Y0, Y0
+// 1. VPBBROADCASTQ 8byte->32byte 1
+// 2. VPCMPEQQ	2
+// 3. VPTEST Y0, Y0	3
 //
 //
 // // Has returns the key in set or not.
