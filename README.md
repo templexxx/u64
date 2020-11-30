@@ -49,7 +49,7 @@ overhead, so the space cost is at least 2x.
 
 ### Other Hash Set
 
-The overhead is matter in normal hash set, because of the bucket linker. And it's really hard to make it wait-free.
+The overhead is matter in normal hash set, because of the bucket linker. It's really hard to make it wait-free.
 
 ### Others
 
@@ -64,9 +64,7 @@ add key into the other one.
 The probability of both buckets meet no space error is a serious problem, if the probability is high, the whole design
 of the structure is unreliable.
 
-The conclusion is: up to 5.47e-28
-
-It's about 300μg/the Earth's Oceans.
+The conclusion is: up to 2.33e-14
 
 ### The Proof
 
@@ -77,9 +75,13 @@ bucket, after transferring all keys into the new one, the new one's load factor 
 
 The rate of each entry is not empty is 0.375.
 
-The neighbour size is 64.
+The neighbour size is 32.
 
-`P = 0.375^64 = 5.47e-28`
+`P = 0.375^32 = 2.34e-18`
+
+If the load factor is 0.5(which means the usage of the last table is 100%):
+
+`P = 0.5^32 = 2.33e-14`
 
 ## Linkers
 
