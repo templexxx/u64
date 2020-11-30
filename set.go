@@ -133,13 +133,64 @@ func (s *Set) Add(key uint64) error {
 	return s.tryInsert(key)
 }
 
+// TODO Contains logic:
+// 1. VPBBROADCASTQ 8byte->32byte 1
+// 2. VPCMPEQQ	2
+// 3. VPTEST Y0, Y0	3
+//
+//
+// Contains returns the key in set or not.
 func (s *Set) Contains(key uint64) bool {
+
+	p0 := atomic.LoadPointer(&s.cycle[0])
+	tbl0 := *(*[]uint64)(p0)
+
+	if s.searchTbl(key, tbl0) {
+		return true
+	}
+	p1 := atomic.LoadPointer(&s.cycle[1])
+	if p1 != nil {
+		tbl1 := *(*[]uint64)(p1)
+		if s.searchTbl(key, tbl1) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
+
+	h := hashFunc(key)
+	slotCnt := len(tbl)
+	slot := int(h & uint64(len(tbl)-1))
+
+	for i := 0; i < neighbour && i+slot < slotCnt; i++ {
+		k := atomic.LoadUint64(&tbl[slot+i])
+		if k == key {
+			return true
+		}
+	}
 
 	return false
 }
 
+// Remove removes key in set.
 func (s *Set) Remove(key uint64) {
+	bkt := uint64(digest) & bktMask
 
+	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
+
+		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
+		if entry>>digestShift&keyMask == uint64(digest) {
+			deleted := entry >> deletedShift & deletedMask
+			if deleted == 1 { // Deleted.
+				return
+			}
+			a := uint64(1) << deletedShift
+			entry = entry | a
+			atomic.StoreUint64(&s.cycle[bkt+uint64(i)], entry)
+		}
+	}
 }
 
 var (
@@ -158,123 +209,93 @@ func (s *Set) tryInsert(key uint64) (err error) {
 
 restart:
 	p := atomic.LoadPointer(&s.cycle[0])
-	bkts := *(*[]uint64)(p)
-	bktCnt := len(bkts)
-	mask := uint64(len(bkts) - 1)
+	tbl := *(*[]uint64)(p)
+	slotCnt := len(tbl)
+	mask := uint64(len(tbl) - 1)
 
 	h := hashFunc(key)
 
-	bkt := int(h & mask)
+	slot := int(h & mask)
 
 	// 1. Ensure key is unique.
-	bktOff := neighbour // bktOff is the distance between avail bucket from bkt.
-	// TODO use SIMD
-	for i := 0; i < neighbour && bkt+i < bktCnt; i++ {
-		entry := atomic.LoadUint64(&bkts[bkt+i])
-		if entry == key {
+	slotOff := neighbour // slotOff is the distance between avail slot from hashed slot.
+	for i := 0; i < neighbour && slot+i < slotCnt; i++ {
+		k := atomic.LoadUint64(&tbl[slot+i])
+		if k == key {
 			return nil // If already contains, do nothing.
 		}
-		if entry == 0 {
-			if i < bktOff {
-				bktOff = i
+		if k == 0 {
+			if i < slotOff {
+				slotOff = i
 			}
-			continue
+			continue // Go on trying to find the same key.
 		}
 	}
 
 	// 2. Try to Add within neighbour
-	if bktOff < neighbour { // There is bktOff bucket within neighbour.
-		if !atomic.CompareAndSwapUint64(&bkts[bkt+bktOff], 0, key) {
+	if slotOff < neighbour {
+		if !atomic.CompareAndSwapUint64(&tbl[slot+slotOff], 0, key) {
 			goto restart
 		}
 		return nil
 	}
 
-	// 3. Linear probe to find an empty bucket and swap.
-	j := bkt + neighbour
-	for {
-		free, ok := s.swap(j, bktCnt)
-		if !ok {
+	// 3. Linear probe to find an empty slot and swap.
+	j := slot + neighbour
+	for { // Closer and closer.
+		free, status := s.swap(j, slotCnt, tbl)
+		if status == swapFull {
 			return ErrIsFull
 		}
-		if free-bkt < neighbour {
-			entry := (free-bkt)<<neighOffShift | digest<<digestShift | addr
-			atomic.StoreUint64(&s.cycle[free], entry)
+		if status == swapCASFailed {
+			goto restart
+		}
+		if free-slot < neighbour {
+			if !atomic.CompareAndSwapUint64(&tbl[free], 0, key) {
+				goto restart
+			}
 			return nil
 		}
 		j = free
 	}
 }
 
-// swap exchanges the free bucket and the another one (within the neighbourhood with the bucket we want).
-// Return true if find one.
-func (s *Set) swap(start, bktCnt int, bkts []uint64) (int, bool) {
+const (
+	swapOK = iota
+	swapFull
+	swapCASFailed
+)
 
+// swap swaps the free slot and the another one (closer to the hashed slot).
+// Return position & swapOK if find one.
+func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
+
+	mask := uint64(len(tbl) - 1)
 	for i := start; i < bktCnt; i++ {
-		if atomic.LoadUint64(&bkts[i]) == 0 { // Find a free one.
-			for j := i - neighbour + 1; j < i; j++ { // Search forward.
-				entry := atomic.LoadUint64(&bkts[j])
-				if entry>>neighOffShift&neighOffMask+i-j < neighbour {
-					atomic.StoreUint64(&s.cycle[i], entry)
-					atomic.StoreUint64(&s.cycle[j], 0)
-
-					return j, true
+		if atomic.LoadUint64(&tbl[i]) == 0 { // Find a free one.
+			j := i - neighbour + 1
+			if j < 0 {
+				j = 0
+			}
+			for ; j < i; j++ { // Search start at the closet position.
+				k := atomic.LoadUint64(&tbl[j])
+				slot := int(hashFunc(k) & mask)
+				if i-slot < neighbour {
+					if !atomic.CompareAndSwapUint64(&tbl[i], 0, k) {
+						return 0, swapCASFailed
+					}
+					if !atomic.CompareAndSwapUint64(&tbl[j], k, 0) {
+						return 0, swapCASFailed // May cause two k in the same bucket.
+					}
+					return j, swapOK
 				}
 			}
-			return 0, false // Can't find bucket for swapping. Table is full.
+			return 0, swapFull // Can't find slot for swapping. Table is full.
 		}
 	}
-	return 0, false
+	return 0, swapFull
 }
 
-// TODO Contains logic:
-// 1. VPBBROADCASTQ 8byte->32byte 1
-// 2. VPCMPEQQ	2
-// 3. VPTEST Y0, Y0	3
-//
-//
-// // Has returns the key in set or not.
-// // There are multi goroutines try to Has.
-// func (s *Set) Has(key uint64) bool {
-//
-// 	bkt := uint64(digest) & bktMask
-//
-// 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-//
-// 		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
-//
-// 		if entry>>digestShift&keyMask == uint64(digest) {
-// 			deleted := entry >> deletedShift & deletedMask
-// 			if deleted == 1 { // Deleted.
-// 				return 0, ErrNotFound
-// 			}
-// 			// entry maybe modified after atomic load.
-// 			// Check it after read from disk.
-// 			return uint32(entry & addrMask), nil
-// 		}
-// 	}
-//
-// 	return 0, ErrNotFound
-// }
-//
-// // Remove removes key in set.
-// func (s *Set) Remove(key uint64) {
-// 	bkt := uint64(digest) & bktMask
-//
-// 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-//
-// 		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
-// 		if entry>>digestShift&keyMask == uint64(digest) {
-// 			deleted := entry >> deletedShift & deletedMask
-// 			if deleted == 1 { // Deleted.
-// 				return
-// 			}
-// 			a := uint64(1) << deletedShift
-// 			entry = entry | a
-// 			atomic.StoreUint64(&s.cycle[bkt+uint64(i)], entry)
-// 		}
-// 	}
-// }
 //
 // // List lists all keys in set.
 // func (s *Set) List() []uint64 {
