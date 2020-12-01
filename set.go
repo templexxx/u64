@@ -36,10 +36,12 @@ const (
 var (
 	// ShrinkRatio is the avail_keys/total_capacity ratio,
 	// when the ratio < ShrinkRatio, indicating Set may need to shrink.
+	// TODO implement ratio checking, too big ratio is meaningless.
 	ShrinkRatio = defaultShrinkRatio
 	// ShrinkDuration is the minimum duration between last add and Set shrink.
 	// When now - last_add > ShrinkDuration & avail_keys/total_capacity < ShrinkRatio & it's the writable slice,
 	// shrink will happen.
+	// TODO implement duration checking, too big or too small duration is meaningless.
 	ShrinkDuration = defaultShrinkInterval
 )
 
@@ -59,7 +61,6 @@ const neighbour = 32
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
-	// TODO may use lock
 	sync.Mutex
 
 	// status struct(uint64):
@@ -73,6 +74,8 @@ type Set struct {
 	//                low_bit is read, high_bit is write(actually it's insertion):
 	//				  e.g. 10(BigEndian) means read true, write false.
 	// is_running: Set is running or not.
+	//
+	// Compress all status into one uint64 for saving memory.
 	status uint64
 	// _padding here for avoiding false share.
 	// cycle which under the status won't be modified frequently, but read frequently.
