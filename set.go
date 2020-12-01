@@ -12,14 +12,11 @@ package u64
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math/bits"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-	"github.com/templexxx/tsc"
 
 	"github.com/cespare/xxhash/v2"
 
@@ -30,7 +27,7 @@ const (
 	defaultShrinkRatio    = 0.25
 	defaultShrinkInterval = 2 * time.Minute
 	// defaultMaxCap is the default maximum capacity of Set.
-	defaultMaxCap = 2 ^ 25 // 32Mi * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
+	defaultMaxCap = 1 << 25 // 32Mi * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
 )
 
 var (
@@ -61,6 +58,8 @@ const neighbour = 32
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
+	// Using a big lock here,
+	// we assume modification is not much, so the lock will be quite light.
 	sync.Mutex
 
 	// status struct(uint64):
@@ -118,105 +117,6 @@ func New(cap int) *Set {
 	}
 }
 
-// create status when New a Set.
-func createStatus() uint64 {
-	return 1<<63 | 3<<60
-}
-
-const cntMask = (1 << 26) - 1
-
-// statusAdd update add info when new key added.
-func (s *Set) statusAdd() {
-	old := atomic.LoadUint64(&s.status)
-	nv := old
-	nv += 1
-	ts := getTS()
-	nv = (nv >> 58 << 58) | (uint64(ts) << 26) | (nv & cntMask)
-
-	atomic.StoreUint64(&s.status, nv)
-}
-
-// getTS gets u64 timestamp.
-func getTS() uint32 {
-	now := tsc.UnixNano()
-	sec := now / int64(time.Second)
-	ts := uint32(sec - epoch)
-	if ts >= maxTS {
-		panic("u64 met its doom")
-	}
-	return ts
-}
-
-// statusDel update add info when key has been deleted.
-func (s *Set) statusDel() {
-	atomic.AddUint64(&s.status, ^uint64(0))
-}
-
-// TODO should return now write idx, now cap
-func (s *Set) couldScale() bool {
-
-	sa := atomic.LoadUint64(&s.status)
-
-	w, ar := s.getRW()
-	if w != cycleNonExisted && ar == true {
-		return true
-	}
-	return false
-}
-
-const (
-	cycleNonExisted = 2 // cycle only has two slice, 2 is invalid.
-	cycleBoth       = 3
-)
-
-// getRW gets Set write-only & read-only cycle indexes.
-func (s *Set) getRW() (w, r uint8) {
-
-	sa := atomic.LoadUint64(&s.status)
-	rw0 := (sa >> 58) & 3
-	rw1 := (sa >> 50) & 3
-	if rw0 >= 2 {
-		w = 0
-		if rw1&1 == 1 {
-			r = 1
-		} else {
-			r = cycleNonExisted
-		}
-	} else if rw1 >= 2 {
-		w = 1
-		if rw0&1 == 1 {
-			r = 0
-		} else {
-			r = cycleNonExisted
-		}
-	} else {
-		w = cycleNonExisted
-		if rw0&1 == 1 {
-			r = 0
-		} else if rw1&1 == 1 {
-			r = 1
-		} else {
-			r = cycleNonExisted
-		}
-	}
-
-	return
-}
-
-// release releases obsoleted table.
-func (s *Set) release(i int) {
-	atomic.StorePointer(&s.cycle[i], nil)
-
-	offset := i*2 + 58
-	old := atomic.LoadUint64(&s.status)
-	v := old | (1 << offset)
-	atomic.StoreUint64(&s.status, v)
-}
-
-func (s *Set) exchangeRW() {
-
-}
-
 // Close closes Set and release the resource.
 func (s *Set) Close() {
 	atomic.StoreUint64(&s.status, 0)
@@ -238,18 +138,6 @@ func nextPower2(n uint64) uint64 {
 	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
 }
 
-const (
-	// epoch is an Unix time.
-	// 2020-06-03T08:39:34.000+0800.
-	epoch     int64 = 1591144774
-	epochNano       = epoch * int64(time.Second)
-	// doom is the zai's max Unix time.
-	// It will reach the end after 136 years from epoch.
-	doom int64 = 5880040774 // epoch + 136 years (about 2^32 seconds).
-	// maxTS is the zai's max timestamp.
-	maxTS = uint32(doom - epoch)
-)
-
 // Add adds key into Set.
 // Return nil if succeed.
 //
@@ -257,21 +145,25 @@ const (
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
 func (s *Set) Add(key uint64) error {
+	s.Lock()
 	err := s.tryInsert(key)
 	switch err {
 	case ErrIsFull:
 		idx, tCap, ok := s.couldScale()
 		if !ok {
+			s.Unlock()
 			return ErrIsFull
 		}
 		if tCap*2 > MaxCap {
+			s.Unlock()
 			return ErrIsFull
 		}
 		next := idx ^ 1
 		newTbl := make([]uint64, tCap*2)
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
 		_ = s.tryInsert(key) // First insert can't fail.
-		go s.expand()
+		s.Unlock()
+		go s.expand(idx)
 		return nil
 	default:
 		return err
@@ -284,17 +176,13 @@ func (s *Set) expand(ri int) {
 	for i := range src {
 		v := atomic.LoadUint64(&src[i])
 		if v != 0 {
-			for {
-				err := s.tryInsert(v)
-				if err == ErrLockFailed {
-					time.Sleep(128 * time.Microsecond)
-					continue
-				}
-				if err == ErrIsFull {
-					return
-				}
-				break
+			s.Lock()
+			err := s.tryInsert(v)
+			if err == ErrIsFull {
+				s.Unlock()
+				return
 			}
+			s.Unlock()
 		}
 	}
 	s.release(ri)
@@ -362,9 +250,8 @@ func (s *Set) Remove(key uint64) {
 }
 
 var (
-	ErrLockFailed = errors.New(fmt.Sprintf("cannot get lock, retried: %d, please try it again later", maxRetry))
-	ErrIsFull     = errors.New("set is full")
-	ErrNotFound   = errors.New("not found")
+	ErrIsFull   = errors.New("set is full")
+	ErrNotFound = errors.New("not found")
 )
 
 // TODO check escape
@@ -382,8 +269,6 @@ var hashFunc1 = func(k uint64) uint64 {
 	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
 }
 
-const maxRetry = 32
-
 func (s *Set) tryInsert(key uint64) (err error) {
 
 	defer func() {
@@ -392,13 +277,6 @@ func (s *Set) tryInsert(key uint64) (err error) {
 		}
 	}()
 
-	cnt := 0
-
-restart:
-	cnt++
-	if cnt > maxRetry {
-		return ErrLockFailed
-	}
 	p := atomic.LoadPointer(&s.cycle[0])
 	tbl := *(*[]uint64)(p)
 	slotCnt := len(tbl)
