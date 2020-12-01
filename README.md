@@ -6,23 +6,11 @@ Unsigned 64-bit Integer Set in Go.
 >
 >   Read Optimized: 
 >   Read is wait-free and Cache-friendly, which means only needs few atomic read sequentially.
->   
->- **Rich Features:**
->
->   Add
->
->   Contains
->
->   Delete
->
->   Close
->
->   List
 >
 >- **Low Overhead**
 >
 >   Although it can't compress digits, comparing other implementation which supports dynamically updating, it does save
->   memory because there is no pointer. Each key needs about 10Bytes, overhead is 25%.
+>   memory because there is no pointer. Each key needs about 10Bytes, overhead is 25% (TODO test the overhead).
 >
 >- **Auto Scaling**
 >
