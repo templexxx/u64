@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/bits"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -55,17 +56,26 @@ const (
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
+	sync.Mutex
 	// add_status struct(uint64):
-	// 64                       0
-	// <-------------------------
-	// | cnt(32) | last_add(32) |
+	// 64                                                     0
+	// <-------------------------------------------------------
+	// | cycle1_rw(2) | cycle0_rw(2) | cnt(28) | last_add(32) |
 	//
-	// cnt: count of added keys.
 	// last_add: timestamp of last add.
+	// cnt: count of added keys.
+	// cycle<idx>_rw: cycle<idx> read & write status, 1 means true, 0 means false,
+	//                low_bit is read, high_bit is write:
+	//				  e.g. 10(BigEndian) means read true, write false.
 	addStatus uint64
 	// _padding here for avoiding false share.
 	// cycle which under the addStatus won't be modified frequently, but read frequently.
+	//
+	// TODO may don't need it because the the write operations aren't many, few cache miss is okay.
+	// remove it could save 128 bytes, it's attractive for application which want to save every bit.
 	_padding [cpu.X86FalseSharingRange]byte
+
+	// TODO cycleStatus uint64
 
 	// cycle is the container of tables,
 	// it's made of two uint64 slices,
@@ -176,6 +186,7 @@ func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
 
 // Remove removes key in set.
 func (s *Set) Remove(key uint64) {
+
 	bkt := uint64(digest) & bktMask
 
 	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
@@ -272,6 +283,7 @@ func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
 
 	mask := uint64(len(tbl) - 1)
 	for i := start; i < bktCnt; i++ {
+		// TODO should lock here
 		if atomic.LoadUint64(&tbl[i]) == 0 { // Find a free one.
 			j := i - neighbour + 1
 			if j < 0 {
