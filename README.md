@@ -4,12 +4,20 @@ Unsigned 64-bit Integer Set in Go.
 
 >- **High Performance:**
 >
->   Read Optimized: Supports one write goroutine and multi read goroutine.
+>   Read Optimized: 
 >   Read is wait-free and Cache-friendly, which means only needs few atomic read sequentially.
 >   
 >- **Rich Features:**
 >
->   Search, Insert, Delete, List
+>   Add
+>
+>   Contains
+>
+>   Delete
+>
+>   Close
+>
+>   List
 >
 >- **Low Overhead**
 >

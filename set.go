@@ -12,13 +12,17 @@ package u64
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/bits"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/templexxx/cpu"
+	"github.com/templexxx/tsc"
+
+	"github.com/cespare/xxhash/v2"
+
 	"github.com/zeebo/xxh3"
 )
 
@@ -37,10 +41,11 @@ var (
 	// When now - last_add > ShrinkDuration & avail_keys/total_capacity < ShrinkRatio & it's the writable slice,
 	// shrink will happen.
 	ShrinkDuration = defaultShrinkInterval
-	// MaxCap is the maximum capacity of Set.
-	// The real max number of keys may be around 0.8 * MaxCap.
-	MaxCap = defaultMaxCap
 )
+
+// MaxCap is the maximum capacity of Set.
+// The real max number of keys may be around 0.8~0.9 * MaxCap.
+const MaxCap = defaultMaxCap
 
 // neighbour is the hopscotch hash neighbourhood size.
 //
@@ -49,44 +54,41 @@ var (
 // 3.81e-40 < P < 1e-4
 //
 // If there is no place to set key, try to resize to another bucket until meet MaxCap.
-const (
-	neighbour = 32
-)
+const neighbour = 32
 
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
+	// TODO may use lock
 	sync.Mutex
-	// add_status struct(uint64):
-	// 64                                                     0
-	// <-------------------------------------------------------
-	// | cycle1_rw(2) | cycle0_rw(2) | cnt(28) | last_add(32) |
+
+	// status struct(uint64):
+	// 64                                                                                  0
+	// <------------------------------------------------------------------------------------
+	// | is_running(1) | padding(1) | cycle1_rw(2) | cycle0_rw(2) | last_add(32) | cnt(26) |
 	//
-	// last_add: timestamp of last add.
 	// cnt: count of added keys.
+	// last_add: timestamp of last add.
 	// cycle<idx>_rw: cycle<idx> read & write status, 1 means true, 0 means false,
-	//                low_bit is read, high_bit is write:
+	//                low_bit is read, high_bit is write(actually it's insertion):
 	//				  e.g. 10(BigEndian) means read true, write false.
-	addStatus uint64
+	// is_running: Set is running or not.
+	status uint64
 	// _padding here for avoiding false share.
-	// cycle which under the addStatus won't be modified frequently, but read frequently.
+	// cycle which under the status won't be modified frequently, but read frequently.
 	//
 	// TODO may don't need it because the the write operations aren't many, few cache miss is okay.
 	// remove it could save 128 bytes, it's attractive for application which want to save every bit.
-	_padding [cpu.X86FalseSharingRange]byte
-
-	// TODO cycleStatus uint64
+	// _padding [cpu.X86FalseSharingRange]byte
 
 	// cycle is the container of tables,
-	// it's made of two uint64 slices,
-	// only the cycle[0] is writable at a certain time.
+	// it's made of two uint64 slices.
+	// only the one could be inserted at a certain time.
 	cycle [2]unsafe.Pointer
 }
 
 const (
-	// Start with a minCap,
-	// saving memory:
-	// total usage = Set struct + Set pointer + minCap * 8bytes = 152 + 8 + minCap * 8 = 176bytes
+	// Start with a minCap, saving memory.
 	minCap = 2
 )
 
@@ -97,6 +99,8 @@ const (
 // If cap is zero, using minCap.
 func New(cap int) *Set {
 
+	cap = int(nextPower2(uint64(cap)))
+
 	if cap < minCap {
 		cap = minCap
 	}
@@ -104,13 +108,123 @@ func New(cap int) *Set {
 		cap = MaxCap
 	}
 
-	cap = int(nextPower2(uint64(cap)))
-
 	bkt0 := make([]uint64, cap, cap) // Create one bucket at the beginning.
-
 	return &Set{
-		cycle: [2]unsafe.Pointer{unsafe.Pointer(&bkt0)},
+		status: createStatus(),
+		cycle:  [2]unsafe.Pointer{unsafe.Pointer(&bkt0)},
 	}
+}
+
+// create status when New a Set.
+func createStatus() uint64 {
+	return 1<<63 | 3<<60
+}
+
+const cntMask = (1 << 26) - 1
+
+// statusAdd update add info when new key added.
+func (s *Set) statusAdd() {
+	old := atomic.LoadUint64(&s.status)
+	nv := old
+	nv += 1
+	ts := getTS()
+	nv = (nv >> 58 << 58) | (uint64(ts) << 26) | (nv & cntMask)
+
+	atomic.StoreUint64(&s.status, nv)
+}
+
+// getTS gets u64 timestamp.
+func getTS() uint32 {
+	now := tsc.UnixNano()
+	sec := now / int64(time.Second)
+	ts := uint32(sec - epoch)
+	if ts >= maxTS {
+		panic("u64 met its doom")
+	}
+	return ts
+}
+
+// statusDel update add info when key has been deleted.
+func (s *Set) statusDel() {
+	atomic.AddUint64(&s.status, ^uint64(0))
+}
+
+// TODO should return now write idx, now cap
+func (s *Set) couldScale() bool {
+
+	sa := atomic.LoadUint64(&s.status)
+
+	w, ar := s.getRW()
+	if w != cycleNonExisted && ar == true {
+		return true
+	}
+	return false
+}
+
+const (
+	cycleNonExisted = 2 // cycle only has two slice, 2 is invalid.
+	cycleBoth       = 3
+)
+
+// getRW gets Set write-only & read-only cycle indexes.
+func (s *Set) getRW() (w, r uint8) {
+
+	sa := atomic.LoadUint64(&s.status)
+	rw0 := (sa >> 58) & 3
+	rw1 := (sa >> 50) & 3
+	if rw0 >= 2 {
+		w = 0
+		if rw1&1 == 1 {
+			r = 1
+		} else {
+			r = cycleNonExisted
+		}
+	} else if rw1 >= 2 {
+		w = 1
+		if rw0&1 == 1 {
+			r = 0
+		} else {
+			r = cycleNonExisted
+		}
+	} else {
+		w = cycleNonExisted
+		if rw0&1 == 1 {
+			r = 0
+		} else if rw1&1 == 1 {
+			r = 1
+		} else {
+			r = cycleNonExisted
+		}
+	}
+
+	return
+}
+
+// release releases obsoleted table.
+func (s *Set) release(i int) {
+	atomic.StorePointer(&s.cycle[i], nil)
+
+	offset := i*2 + 58
+	old := atomic.LoadUint64(&s.status)
+	v := old | (1 << offset)
+	atomic.StoreUint64(&s.status, v)
+}
+
+func (s *Set) exchangeRW() {
+
+}
+
+// Close closes Set and release the resource.
+func (s *Set) Close() {
+	atomic.StoreUint64(&s.status, 0)
+	atomic.StorePointer(&s.cycle[0], nil)
+	atomic.StorePointer(&s.cycle[1], nil)
+}
+
+// IsRunning returns Set is running or not.
+func (s *Set) IsRunning() bool {
+	sa := atomic.LoadUint64(&s.status)
+	return (sa>>63)&1 == 1
 }
 
 func nextPower2(n uint64) uint64 {
@@ -140,7 +254,47 @@ const (
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
 func (s *Set) Add(key uint64) error {
-	return s.tryInsert(key)
+	err := s.tryInsert(key)
+	switch err {
+	case ErrIsFull:
+		idx, tCap, ok := s.couldScale()
+		if !ok {
+			return ErrIsFull
+		}
+		if tCap*2 > MaxCap {
+			return ErrIsFull
+		}
+		next := idx ^ 1
+		newTbl := make([]uint64, tCap*2)
+		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
+		_ = s.tryInsert(key) // First insert can't fail.
+		go s.expand()
+		return nil
+	default:
+		return err
+	}
+}
+
+func (s *Set) expand(ri int) {
+	rp := atomic.LoadPointer(&s.cycle[ri])
+	src := *(*[]uint64)(rp)
+	for i := range src {
+		v := atomic.LoadUint64(&src[i])
+		if v != 0 {
+			for {
+				err := s.tryInsert(v)
+				if err == ErrLockFailed {
+					time.Sleep(128 * time.Microsecond)
+					continue
+				}
+				if err == ErrIsFull {
+					return
+				}
+				break
+			}
+		}
+	}
+	s.release(ri)
 }
 
 // TODO Contains logic:
@@ -170,7 +324,7 @@ func (s *Set) Contains(key uint64) bool {
 
 func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
 
-	h := hashFunc(key)
+	h := hashFunc0(key)
 	slotCnt := len(tbl)
 	slot := int(h & uint64(len(tbl)-1))
 
@@ -205,26 +359,49 @@ func (s *Set) Remove(key uint64) {
 }
 
 var (
-	ErrNoNeigh  = errors.New("no neighbour for insertion")
-	ErrIsFull   = errors.New("set is full")
-	ErrNotFound = errors.New("not found")
+	ErrLockFailed = errors.New(fmt.Sprintf("cannot get lock, retried: %d, please try it again later", maxRetry))
+	ErrIsFull     = errors.New("set is full")
+	ErrNotFound   = errors.New("not found")
 )
 
-var hashFunc = func(k uint64) uint64 {
+// TODO check escape
+// hash function for cycle[0]
+var hashFunc0 = func(k uint64) uint64 {
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, k)
-	return xxh3.Hash(b)
+	return xxh3.Hash(b) // xxh3 is prefect bijective for 8bytes and blazing fast.
 }
+
+// hash function for cycle[1]
+var hashFunc1 = func(k uint64) uint64 {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, k)
+	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
+}
+
+const maxRetry = 32
 
 func (s *Set) tryInsert(key uint64) (err error) {
 
+	defer func() {
+		if err == nil {
+			s.statusAdd()
+		}
+	}()
+
+	cnt := 0
+
 restart:
+	cnt++
+	if cnt > maxRetry {
+		return ErrLockFailed
+	}
 	p := atomic.LoadPointer(&s.cycle[0])
 	tbl := *(*[]uint64)(p)
 	slotCnt := len(tbl)
 	mask := uint64(len(tbl) - 1)
 
-	h := hashFunc(key)
+	h := hashFunc0(key)
 
 	slot := int(h & mask)
 
@@ -291,14 +468,15 @@ func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
 			}
 			for ; j < i; j++ { // Search start at the closet position.
 				k := atomic.LoadUint64(&tbl[j])
-				slot := int(hashFunc(k) & mask)
+				slot := int(hashFunc0(k) & mask)
 				if i-slot < neighbour {
 					if !atomic.CompareAndSwapUint64(&tbl[i], 0, k) {
 						return 0, swapCASFailed
 					}
-					if !atomic.CompareAndSwapUint64(&tbl[j], k, 0) {
-						return 0, swapCASFailed // May cause two k in the same bucket.
-					}
+					// It's ok to use store,
+					// The slot only could be changed if it's value is 0:
+					// v0 -> 0 -> v1 -> 0 ...
+					atomic.StoreUint64(&tbl[j], 0)
 					return j, swapOK
 				}
 			}
