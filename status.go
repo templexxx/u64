@@ -1,6 +1,7 @@
 package u64
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -8,13 +9,40 @@ import (
 )
 
 // status struct(uint64):
-// 64                                                                                  0
-// <------------------------------------------------------------------------------------
-// | is_running(1) | padding(1) | cycle1_rw(2) | cycle0_rw(2) | last_add(32) | cnt(26) |
+// 64                                                                                                 58
+// <---------------------------------------------------------------------------------------------------
+// | is_running(1) | locked(1) | cycle1_obsoleted(1) | cycle1_w(1) | cycle0_obsoleted(1) |cycle0_w(1) |
+// 58                       0
+// <-------------------------
+// | last_add(32) | cnt(26) |
+//
+// is_running: [63]
+// locked: [62]
+// cycle1_obsoleted: [61]
+// cycle1_w: [60]
+// cycle0_obsoleted: [59]
+// cycle0_w: [58]
+// last_add: [32, 58)
+// cnt: [0,32)
+
+// IsRunning returns Set is running or not.
+func (s *Set) IsRunning() bool {
+	sa := atomic.LoadUint64(&s.status)
+	return (sa>>63)&1 == 1
+}
 
 // create status when New a Set.
 func createStatus() uint64 {
-	return 1<<63 | 3<<58 // set isRunning & cycle[0] read-write.
+	return 1<<63 | 1<<57 // set isRunning & cycle[0] is writable.
+}
+
+func (s *Set) lockOrRestart() bool {
+	mu := new(sync.Mutex)
+	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
+		return true
+	}
+	mu.Lock()
+	mu.Unlock()
 }
 
 const cntMask = (1 << 26) - 1 // At most 1<<25.
@@ -58,16 +86,16 @@ func (s *Set) statusDel() {
 }
 
 // TODO should return now write idx, now cap
-func (s *Set) couldScale() bool {
-
-	sa := atomic.LoadUint64(&s.status)
-
-	w, ar := s.getRW()
-	if w != cycleNonExisted && ar == true {
-		return true
-	}
-	return false
-}
+//func (s *Set) couldScale() bool {
+//
+//	sa := atomic.LoadUint64(&s.status)
+//
+//	w, ar := s.getRW()
+//	if w != cycleNonExisted && ar == true {
+//		return true
+//	}
+//	return false
+//}
 
 const (
 	cycleNonExisted = 2 // cycle only has two slice, 2 is invalid.

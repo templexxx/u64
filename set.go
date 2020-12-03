@@ -13,13 +13,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/bits"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
-
 	"github.com/zeebo/xxh3"
 )
 
@@ -58,21 +56,20 @@ const neighbour = 32
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
-	// Using a big lock here,
-	// we assume modification is not much, so the lock will be quite light.
-	sync.Mutex
-
 	// status struct(uint64):
-	// 64                                                                                  0
-	// <------------------------------------------------------------------------------------
-	// | is_running(1) | padding(1) | cycle1_rw(2) | cycle0_rw(2) | last_add(32) | cnt(26) |
+	// 64                                                                                                 58
+	// <---------------------------------------------------------------------------------------------------
+	// | is_running(1) | locked(1) | cycle1_obsoleted(1) | cycle1_w(1) | cycle0_obsoleted(1) |cycle0_w(1) |
+	// 58                       0
+	// <-------------------------
+	// | last_add(32) | cnt(26) |
 	//
 	// cnt: count of added keys.
 	// last_add: timestamp of last add.
-	// cycle<idx>_rw: cycle<idx> read & write status, 1 means true, 0 means false,
-	//                low_bit is read, high_bit is write(actually it's insertion):
-	//				  e.g. 10(BigEndian) means read true, write false.
-	// is_running: Set is running or not.
+	// cycle<idx>_w: cycle<idx> is writable or not, 1 means true, 0 means false.
+	// cycle<idx>_obsoleted: cycle<idx> is obsoleted or not, 1 means true, 0 means false.
+	// locked: Set is locked or not, 1 means true, 0 means false.
+	// is_running: Set is running or not, 1 means true, 0 means false.
 	//
 	// Compress all status into one uint64 for saving memory.
 	status uint64
@@ -124,12 +121,6 @@ func (s *Set) Close() {
 	atomic.StorePointer(&s.cycle[1], nil)
 }
 
-// IsRunning returns Set is running or not.
-func (s *Set) IsRunning() bool {
-	sa := atomic.LoadUint64(&s.status)
-	return (sa>>63)&1 == 1
-}
-
 func nextPower2(n uint64) uint64 {
 	if n <= 1 {
 		return 1
@@ -144,49 +135,46 @@ func nextPower2(n uint64) uint64 {
 // Warning:
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
-func (s *Set) Add(key uint64) error {
-	s.Lock()
-	err := s.tryInsert(key)
-	switch err {
-	case ErrIsFull:
-		idx, tCap, ok := s.couldScale()
-		if !ok {
-			s.Unlock()
-			return ErrIsFull
-		}
-		if tCap*2 > MaxCap {
-			s.Unlock()
-			return ErrIsFull
-		}
-		next := idx ^ 1
-		newTbl := make([]uint64, tCap*2)
-		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
-		_ = s.tryInsert(key) // First insert can't fail.
-		s.Unlock()
-		go s.expand(idx)
-		return nil
-	default:
-		return err
-	}
-}
+//func (s *Set) Add(key uint64) error {
+//
+//	err := s.tryInsert(key)
+//	switch err {
+//	case ErrIsFull:
+//		idx, tCap, ok := s.couldScale()
+//		if !ok {
+//			return ErrIsFull
+//		}
+//		if tCap*2 > MaxCap {
+//			return ErrIsFull
+//		}
+//		next := idx ^ 1
+//		newTbl := make([]uint64, tCap*2)
+//		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
+//		_ = s.tryInsert(key) // First insert can't fail.
+//		go s.expand(idx)
+//		return nil
+//	default:
+//		return err
+//	}
+//}
 
-func (s *Set) expand(ri int) {
-	rp := atomic.LoadPointer(&s.cycle[ri])
-	src := *(*[]uint64)(rp)
-	for i := range src {
-		v := atomic.LoadUint64(&src[i])
-		if v != 0 {
-			s.Lock()
-			err := s.tryInsert(v)
-			if err == ErrIsFull {
-				s.Unlock()
-				return
-			}
-			s.Unlock()
-		}
-	}
-	s.release(ri)
-}
+//func (s *Set) expand(ri int) {
+//	rp := atomic.LoadPointer(&s.cycle[ri])
+//	src := *(*[]uint64)(rp)
+//	for i := range src {
+//		v := atomic.LoadUint64(&src[i])
+//		if v != 0 {
+//			s.Lock()
+//			err := s.tryInsert(v)
+//			if err == ErrIsFull {
+//				s.Unlock()
+//				return
+//			}
+//			s.Unlock()
+//		}
+//	}
+//	s.release(ri)
+//}
 
 // TODO Contains logic:
 // 1. VPBBROADCASTQ 8byte->32byte 1
@@ -230,24 +218,24 @@ func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
 }
 
 // Remove removes key in set.
-func (s *Set) Remove(key uint64) {
-
-	bkt := uint64(digest) & bktMask
-
-	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-
-		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
-		if entry>>digestShift&keyMask == uint64(digest) {
-			deleted := entry >> deletedShift & deletedMask
-			if deleted == 1 { // Deleted.
-				return
-			}
-			a := uint64(1) << deletedShift
-			entry = entry | a
-			atomic.StoreUint64(&s.cycle[bkt+uint64(i)], entry)
-		}
-	}
-}
+//func (s *Set) Remove(key uint64) {
+//
+//	bkt := uint64(digest) & bktMask
+//
+//	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
+//
+//		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
+//		if entry>>digestShift&keyMask == uint64(digest) {
+//			deleted := entry >> deletedShift & deletedMask
+//			if deleted == 1 { // Deleted.
+//				return
+//			}
+//			a := uint64(1) << deletedShift
+//			entry = entry | a
+//			atomic.StoreUint64(&s.cycle[bkt+uint64(i)], entry)
+//		}
+//	}
+//}
 
 var (
 	ErrIsFull   = errors.New("set is full")
@@ -276,6 +264,8 @@ func (s *Set) tryInsert(key uint64) (err error) {
 			s.statusAdd()
 		}
 	}()
+
+restart:
 
 	p := atomic.LoadPointer(&s.cycle[0])
 	tbl := *(*[]uint64)(p)
