@@ -64,7 +64,7 @@ func createStatus() uint64 {
 	return 1<<63 | 1<<58 // set isRunning & table_0 is writable.
 }
 
-// TODO how to deal with sealed.
+// TODO how to deal with sealed. Should pause make bigger table and transfer all data
 // seal seals Set.
 // When there is no writable table setting Set sealed.
 func (s *Set) seal() {
@@ -118,8 +118,6 @@ func (s *Set) setWritable(idx uint8) {
 	atomic.StoreUint64(&s.status, sa)
 }
 
-const cntMask = (1 << 32) - 1
-
 // addCnt adds Set count.
 func (s *Set) addCnt() {
 	atomic.AddUint64(&s.status, 1) // cnt is the lowest bits, just +1.
@@ -128,4 +126,11 @@ func (s *Set) addCnt() {
 // delCnt minutes Set count.
 func (s *Set) delCnt() {
 	atomic.AddUint64(&s.status, ^uint64(0))
+}
+
+const cntMask = (1 << 32) - 1
+
+func (s *Set) getCnt() uint64 {
+	sa := atomic.LoadUint64(&s.status)
+	return sa & cntMask
 }
