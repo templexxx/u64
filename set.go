@@ -116,7 +116,7 @@ func New(cap int) *Set {
 
 // Close closes Set and release the resource.
 func (s *Set) Close() {
-	atomic.StoreUint64(&s.status, 0)
+	atomic.StoreUint64(&s.status, 0) // TODO should remain other status
 	atomic.StorePointer(&s.cycle[0], nil)
 	atomic.StorePointer(&s.cycle[1], nil)
 }
@@ -261,7 +261,7 @@ func (s *Set) tryInsert(key uint64) (err error) {
 
 	defer func() {
 		if err == nil {
-			s.statusAdd()
+			s.addCnt()
 		}
 	}()
 

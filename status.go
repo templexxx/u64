@@ -1,28 +1,26 @@
 package u64
 
 import (
-	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/templexxx/tsc"
 )
 
+// TODO shrink should be manually, because it's heavy & the last_add is too slow because need to get timestamp
+// TODO add is_scaling flag
+// TODO remove last_add
+
 // status struct(uint64):
-// 64                                                                                                 58
-// <---------------------------------------------------------------------------------------------------
-// | is_running(1) | locked(1) | cycle1_obsoleted(1) | cycle1_w(1) | cycle0_obsoleted(1) |cycle0_w(1) |
-// 58                       0
-// <-------------------------
-// | last_add(32) | cnt(26) |
+// 64                                                                   59
+// <----------------------------------------------------------------------
+// | is_running(1) | locked(1) | sealed(1) | is_scaling(1) | writable(1) |
+// 59                       0
+// <------------------------
+// | padding(27) | cnt(32) |
 //
 // is_running: [63]
 // locked: [62]
-// cycle1_obsoleted: [61]
-// cycle1_w: [60]
-// cycle0_obsoleted: [59]
-// cycle0_w: [58]
-// last_add: [32, 58)
+// sealed: [61]
+// is_scaling: [60]
+// writable: [59]
 // cnt: [0,32)
 
 // IsRunning returns Set is running or not.
@@ -31,121 +29,96 @@ func (s *Set) IsRunning() bool {
 	return (sa>>63)&1 == 1
 }
 
+// lock tries to lock Set, return true if succeed.
+func (s *Set) lock() bool {
+	sa := atomic.LoadUint64(&s.status)
+	if isLocked(sa) {
+		return false // locked.
+	}
+
+	nsa := sa | (1 << 62)
+	return atomic.CompareAndSwapUint64(&s.status, sa, nsa)
+}
+
+// unlock unlocks Set, Set must be locked.
+func (s *Set) unlock() {
+	sa := atomic.LoadUint64(&s.status)
+	sa &= ^(1 << 62)
+
+	atomic.StoreUint64(&s.status, sa)
+}
+
+func isLocked(sa uint64) bool {
+	return (sa>>62)&1 == 1
+}
+
 // create status when New a Set.
 func createStatus() uint64 {
-	return 1<<63 | 1<<57 // set isRunning & cycle[0] is writable.
+	return 1<<63 | 1<<58 // set isRunning & table_0 is writable.
 }
 
-func (s *Set) lockOrRestart() bool {
-	mu := new(sync.Mutex)
-	if atomic.CompareAndSwapInt32(&m.state, 0, mutexLocked) {
-		return true
-	}
-	mu.Lock()
-	mu.Unlock()
-}
-
-const cntMask = (1 << 26) - 1 // At most 1<<25.
-
-// statusAdd update add info when new key added.
-func (s *Set) statusAdd() {
-	old := atomic.LoadUint64(&s.status)
-	nv := old
-	nv += 1 // Cnt is the lowest bits, just +1.
-	ts := getTS()
-	nv = (nv >> 58 << 58) | (uint64(ts) << 26) | (nv & cntMask)
-
-	atomic.StoreUint64(&s.status, nv)
-}
-
-const (
-	// epoch is an Unix time.
-	// 2020-06-03T08:39:34.000+0800.
-	epoch int64 = 1591144774
-	// doom is the u64's max Unix time.
-	// It will reach the end after 136 years from epoch.
-	doom int64 = 5880040774 // epoch + 136 years (about 2^32 seconds).
-	// maxTS is the u64's max timestamp.
-	maxTS = uint32(doom - epoch)
-)
-
-// getTS gets u64 timestamp.
-func getTS() uint32 {
-	now := tsc.UnixNano()
-	sec := now / int64(time.Second)
-	ts := uint32(sec - epoch)
-	if ts >= maxTS {
-		panic("u64 met its doom")
-	}
-	return ts
-}
-
-// statusDel update add info when key has been deleted.
-func (s *Set) statusDel() {
-	atomic.AddUint64(&s.status, ^uint64(0))
-}
-
-// TODO should return now write idx, now cap
-//func (s *Set) couldScale() bool {
-//
-//	sa := atomic.LoadUint64(&s.status)
-//
-//	w, ar := s.getRW()
-//	if w != cycleNonExisted && ar == true {
-//		return true
-//	}
-//	return false
-//}
-
-const (
-	cycleNonExisted = 2 // cycle only has two slice, 2 is invalid.
-	cycleBoth       = 3
-)
-
-// getRW gets Set write-only & read-only cycle indexes.
-func (s *Set) getRW() (w, r uint8) {
-
+// TODO how to deal with sealed.
+// seal seals Set.
+// When there is no writable table setting Set sealed.
+func (s *Set) seal() {
 	sa := atomic.LoadUint64(&s.status)
-	rw0 := (sa >> 58) & 3
-	rw1 := (sa >> 50) & 3
-	if rw0 >= 2 {
-		w = 0
-		if rw1&1 == 1 {
-			r = 1
-		} else {
-			r = cycleNonExisted
-		}
-	} else if rw1 >= 2 {
-		w = 1
-		if rw0&1 == 1 {
-			r = 0
-		} else {
-			r = cycleNonExisted
-		}
+	sa |= 1 << 61
+	atomic.StoreUint64(&s.status, sa)
+}
+
+// isSealed returns Set is sealed or not.
+func (s *Set) isSealed() bool {
+	sa := atomic.LoadUint64(&s.status)
+	return (sa>>61)&1 == 1
+}
+
+// scale sets Set sealed.
+// When Set is expanding/shrinking setting Set scaling.
+func (s *Set) scale() {
+	sa := atomic.LoadUint64(&s.status)
+	sa |= 1 << 60
+	atomic.StoreUint64(&s.status, sa)
+}
+
+// isScaling returns Set is scaling or not.
+func (s *Set) isScaling() bool {
+	sa := atomic.LoadUint64(&s.status)
+	return (sa>>60)&1 == 1
+}
+
+// unScale sets Set scalable.
+func (s *Set) unScale() {
+	sa := atomic.LoadUint64(&s.status)
+	sa &= ^(1 << 60)
+	atomic.StoreUint64(&s.status, sa)
+}
+
+// getWritableTable gets writable table in Set.
+// 0 or 1.
+func (s *Set) getWritableTable() uint8 {
+	sa := atomic.LoadUint64(&s.status)
+	return uint8((sa >> 59) & 1)
+}
+
+// setWritable sets writable table index.
+func (s *Set) setWritable(idx uint8) {
+	sa := atomic.LoadUint64(&s.status)
+	if idx == 0 {
+		sa &= ^(1 << 59)
 	} else {
-		w = cycleNonExisted
-		if rw0&1 == 1 {
-			r = 0
-		} else if rw1&1 == 1 {
-			r = 1
-		} else {
-			r = cycleNonExisted
-		}
+		sa |= 1 << 59
 	}
-
-	return
+	atomic.StoreUint64(&s.status, sa)
 }
 
-// release releases obsoleted table.
-func (s *Set) release(i int) {
-	atomic.StorePointer(&s.cycle[i], nil)
+const cntMask = (1 << 32) - 1
 
-	offset := i*2 + 58
-	old := atomic.LoadUint64(&s.status)
-	v := old | (1 << offset)
-	atomic.StoreUint64(&s.status, v)
+// addCnt adds Set count.
+func (s *Set) addCnt() {
+	atomic.AddUint64(&s.status, 1) // cnt is the lowest bits, just +1.
 }
 
-func (s *Set) exchangeRW() {
-
+// delCnt minutes Set count.
+func (s *Set) delCnt() {
+	atomic.AddUint64(&s.status, ^uint64(0))
 }
