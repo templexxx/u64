@@ -17,13 +17,22 @@ func TestSet_Close(t *testing.T) {
 	}
 }
 
-func TestCreateStatus(t *testing.T) {
+func TestCreateStatusWritable(t *testing.T) {
 	s := New(0)
 	if s.getWritableTable() != 0 {
 		t.Fatal("writable table mismatched")
 	}
+}
+
+func TestSetWritable(t *testing.T) {
+
+	s := New(0)
 	s.setWritable(1)
 	if s.getWritableTable() != 1 {
+		t.Fatal("writable table mismatched")
+	}
+	s.setWritable(0)
+	if s.getWritableTable() != 0 {
 		t.Fatal("writable table mismatched")
 	}
 }
