@@ -116,7 +116,7 @@ func New(cap int) *Set {
 
 // Close closes Set and release the resource.
 func (s *Set) Close() {
-	atomic.StoreUint64(&s.status, 0) // TODO should remain other status
+	s.close()
 	atomic.StorePointer(&s.cycle[0], nil)
 	atomic.StorePointer(&s.cycle[1], nil)
 }

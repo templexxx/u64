@@ -29,6 +29,13 @@ func (s *Set) IsRunning() bool {
 	return (sa>>63)&1 == 1
 }
 
+// close sets status closed.
+func (s *Set) close() {
+	sa := atomic.LoadUint64(&s.status)
+	sa ^= 1 << 63
+	atomic.StoreUint64(&s.status, sa)
+}
+
 // lock tries to lock Set, return true if succeed.
 func (s *Set) lock() bool {
 	sa := atomic.LoadUint64(&s.status)
@@ -43,7 +50,7 @@ func (s *Set) lock() bool {
 // unlock unlocks Set, Set must be locked.
 func (s *Set) unlock() {
 	sa := atomic.LoadUint64(&s.status)
-	sa &= ^(1 << 62)
+	sa ^= 1 << 62
 
 	atomic.StoreUint64(&s.status, sa)
 }
@@ -89,7 +96,7 @@ func (s *Set) isScaling() bool {
 // unScale sets Set scalable.
 func (s *Set) unScale() {
 	sa := atomic.LoadUint64(&s.status)
-	sa &= ^(1 << 60)
+	sa ^= 1 << 60
 	atomic.StoreUint64(&s.status, sa)
 }
 
@@ -104,7 +111,7 @@ func (s *Set) getWritableTable() uint8 {
 func (s *Set) setWritable(idx uint8) {
 	sa := atomic.LoadUint64(&s.status)
 	if idx == 0 {
-		sa &= ^(1 << 59)
+		sa ^= 1 << 59
 	} else {
 		sa |= 1 << 59
 	}
