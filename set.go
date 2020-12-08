@@ -159,12 +159,27 @@ func (s *Set) Add(key uint64) error {
 	}
 }
 
+// TODO Restart restarts Set, replay scaling
+func (s *Set) Restart() {
+
+}
+
+// TODO GetUsage returns capacity & usage.
+func (s *Set) GetUsage() {
+
+}
+
 func (s *Set) expand(ri int) {
 	rp := atomic.LoadPointer(&s.cycle[ri])
 	src := *(*[]uint64)(rp)
 
 	n, cnt := len(src), 0
 	for i := range src {
+
+		if !s.IsRunning() {
+			return
+		}
+
 		if cnt >= 10 {
 			cnt = 0
 			runtime.Gosched()
