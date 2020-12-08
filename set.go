@@ -56,22 +56,6 @@ const neighbour = 32
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.
 type Set struct {
-	// status struct(uint64):
-	// 64                                                                                                 58
-	// <---------------------------------------------------------------------------------------------------
-	// | is_running(1) | locked(1) | cycle1_obsoleted(1) | cycle1_w(1) | cycle0_obsoleted(1) |cycle0_w(1) |
-	// 58                       0
-	// <-------------------------
-	// | last_add(32) | cnt(26) |
-	//
-	// cnt: count of added keys.
-	// last_add: timestamp of last add.
-	// cycle<idx>_w: cycle<idx> is writable or not, 1 means true, 0 means false.
-	// cycle<idx>_obsoleted: cycle<idx> is obsoleted or not, 1 means true, 0 means false.
-	// locked: Set is locked or not, 1 means true, 0 means false.
-	// is_running: Set is running or not, 1 means true, 0 means false.
-	//
-	// Compress all status into one uint64 for saving memory.
 	status uint64
 	// _padding here for avoiding false share.
 	// cycle which under the status won't be modified frequently, but read frequently.
@@ -129,34 +113,40 @@ func nextPower2(n uint64) uint64 {
 	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
 }
 
+var ErrIsClosed = errors.New("is closed")
+
 // Add adds key into Set.
 // Return nil if succeed.
 //
 // Warning:
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
-//func (s *Set) Add(key uint64) error {
-//
-//	err := s.tryInsert(key)
-//	switch err {
-//	case ErrIsFull:
-//		idx, tCap, ok := s.couldScale()
-//		if !ok {
-//			return ErrIsFull
-//		}
-//		if tCap*2 > MaxCap {
-//			return ErrIsFull
-//		}
-//		next := idx ^ 1
-//		newTbl := make([]uint64, tCap*2)
-//		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
-//		_ = s.tryInsert(key) // First insert can't fail.
-//		go s.expand(idx)
-//		return nil
-//	default:
-//		return err
-//	}
-//}
+func (s *Set) Add(key uint64) error {
+
+	if !s.IsRunning() {
+		return ErrIsClosed
+	}
+
+	err := s.tryInsert(key)
+	switch err {
+	case ErrIsFull:
+		idx, tCap, ok := s.couldScale()
+		if !ok {
+			return ErrIsFull
+		}
+		if tCap*2 > MaxCap {
+			return ErrIsFull
+		}
+		next := idx ^ 1
+		newTbl := make([]uint64, tCap*2)
+		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
+		_ = s.tryInsert(key) // First insert can't fail.
+		go s.expand(idx)
+		return nil
+	default:
+		return err
+	}
+}
 
 //func (s *Set) expand(ri int) {
 //	rp := atomic.LoadPointer(&s.cycle[ri])
@@ -257,6 +247,8 @@ var hashFunc1 = func(k uint64) uint64 {
 	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
 }
 
+var ErrIsSealed = errors.New("is sealed")
+
 func (s *Set) tryInsert(key uint64) (err error) {
 
 	defer func() {
@@ -267,12 +259,28 @@ func (s *Set) tryInsert(key uint64) (err error) {
 
 restart:
 
-	p := atomic.LoadPointer(&s.cycle[0])
+	if !s.lock() {
+		pause()
+		goto restart
+	}
+
+	if s.isSealed() {
+		return ErrIsSealed
+	}
+
+	idx := s.getWritableTable()
+
+	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 	slotCnt := len(tbl)
 	mask := uint64(len(tbl) - 1)
 
-	h := hashFunc0(key)
+	var hashFunc = hashFunc0
+	if idx == 1 {
+		hashFunc = hashFunc1
+	}
+
+	h := hashFunc(key)
 
 	slot := int(h & mask)
 
@@ -293,10 +301,7 @@ restart:
 
 	// 2. Try to Add within neighbour
 	if slotOff < neighbour {
-		if !atomic.CompareAndSwapUint64(&tbl[slot+slotOff], 0, key) {
-			goto restart
-		}
-		return nil
+		atomic.StoreUint64(&tbl[slot+slotOff], key)
 	}
 
 	// 3. Linear probe to find an empty slot and swap.
@@ -310,10 +315,7 @@ restart:
 			goto restart
 		}
 		if free-slot < neighbour {
-			if !atomic.CompareAndSwapUint64(&tbl[free], 0, key) {
-				goto restart
-			}
-			return nil
+			atomic.StoreUint64(&tbl[free], key)
 		}
 		j = free
 	}
@@ -331,7 +333,6 @@ func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
 
 	mask := uint64(len(tbl) - 1)
 	for i := start; i < bktCnt; i++ {
-		// TODO should lock here
 		if atomic.LoadUint64(&tbl[i]) == 0 { // Find a free one.
 			j := i - neighbour + 1
 			if j < 0 {
@@ -341,12 +342,7 @@ func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
 				k := atomic.LoadUint64(&tbl[j])
 				slot := int(hashFunc0(k) & mask)
 				if i-slot < neighbour {
-					if !atomic.CompareAndSwapUint64(&tbl[i], 0, k) {
-						return 0, swapCASFailed
-					}
-					// It's ok to use store,
-					// The slot only could be changed if it's value is 0:
-					// v0 -> 0 -> v1 -> 0 ...
+					atomic.StoreUint64(&tbl[i], k)
 					atomic.StoreUint64(&tbl[j], 0)
 					return j, swapOK
 				}
