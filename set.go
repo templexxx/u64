@@ -50,7 +50,7 @@ const MaxCap = defaultMaxCap
 // 3.81e-40 < P < 1e-4
 //
 // If there is no place to set key, try to resize to another bucket until meet MaxCap.
-const neighbour = 32
+const neighbour = 64
 
 // Set is unsigned 64-bit integer set.
 // Lock-free Write & Wait-free Read.

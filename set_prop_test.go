@@ -4,7 +4,7 @@ import "testing"
 
 // TODO when reach the first full
 func TestMitFull(t *testing.T) {
-	n := 1024 * 1024 * 4
+	n := 1024 * 256
 	s := New(n)
 	s.scale() // Forbidden expanding.
 	cnt := 0
