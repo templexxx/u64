@@ -10,15 +10,14 @@
 package u64
 
 import (
-	"encoding/binary"
 	"errors"
 	"math/bits"
+	"runtime"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/cespare/xxhash/v2"
-	"github.com/zeebo/xxh3"
+	"github.com/templexxx/xxh3"
 )
 
 const (
@@ -113,7 +112,10 @@ func nextPower2(n uint64) uint64 {
 	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
 }
 
-var ErrIsClosed = errors.New("is closed")
+var (
+	ErrIsClosed   = errors.New("is closed")
+	ErrAddTooFast = errors.New("add too fast")
+)
 
 // Add adds key into Set.
 // Return nil if succeed.
@@ -127,44 +129,64 @@ func (s *Set) Add(key uint64) error {
 		return ErrIsClosed
 	}
 
-	err := s.tryInsert(key)
+	err := s.tryInsert(key, false)
 	switch err {
 	case ErrIsFull:
-		idx, tCap, ok := s.couldScale()
-		if !ok {
+		if s.isScaling() {
+			s.unlock()
+			return ErrAddTooFast
+		}
+		idx := s.getWritableTable()
+		p := atomic.LoadPointer(&s.cycle[idx])
+		tbl := *(*[]uint64)(p)
+		if len(tbl)*2 > MaxCap {
+			s.unlock()
 			return ErrIsFull
 		}
-		if tCap*2 > MaxCap {
-			return ErrIsFull
-		}
+
 		next := idx ^ 1
-		newTbl := make([]uint64, tCap*2)
+		newTbl := make([]uint64, len(tbl)*2)
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
-		_ = s.tryInsert(key) // First insert can't fail.
-		go s.expand(idx)
+		s.setWritable(next)
+		s.scale()
+		_ = s.tryInsert(key, true) // First insert can't fail.
+		go s.expand(int(idx))
+		s.unlock()
 		return nil
 	default:
+		s.unlock()
 		return err
 	}
 }
 
-//func (s *Set) expand(ri int) {
-//	rp := atomic.LoadPointer(&s.cycle[ri])
-//	src := *(*[]uint64)(rp)
-//	for i := range src {
-//		v := atomic.LoadUint64(&src[i])
-//		if v != 0 {
-//			s.Lock()
-//			err := s.tryInsert(v)
-//			if err == ErrIsFull {
-//				s.Unlock()
-//				return
-//			}
-//			s.Unlock()
-//		}
-//	}
-//	s.release(ri)
-//}
+func (s *Set) expand(ri int) {
+	rp := atomic.LoadPointer(&s.cycle[ri])
+	src := *(*[]uint64)(rp)
+
+	n, cnt := len(src), 0
+	for i := range src {
+		if cnt >= 10 {
+			cnt = 0
+			runtime.Gosched()
+		}
+		s.lock()
+		v := atomic.LoadUint64(&src[i])
+		if v != 0 {
+			err := s.tryInsert(v, true)
+			if err == ErrIsFull {
+				s.seal()
+				s.unlock()
+				return
+			}
+			cnt++
+		}
+		if i == n-1 { // Last one is finished.
+			atomic.StorePointer(&s.cycle[ri], unsafe.Pointer(nil))
+			s.unScale()
+		}
+		s.unlock()
+	}
+}
 
 // TODO Contains logic:
 // 1. VPBBROADCASTQ 8byte->32byte 1
@@ -175,16 +197,52 @@ func (s *Set) Add(key uint64) error {
 // Contains returns the key in set or not.
 func (s *Set) Contains(key uint64) bool {
 
-	p0 := atomic.LoadPointer(&s.cycle[0])
-	tbl0 := *(*[]uint64)(p0)
+	// 1. Search writable table first.
+	idx := s.getWritableTable()
+	p := atomic.LoadPointer(&s.cycle[idx])
+	tbl := *(*[]uint64)(p)
 
-	if s.searchTbl(key, tbl0) {
+	//if s.searchTbl(key, tbl) {
+	//	return true
+	//}
+	h := getHash(idx, key)
+	slotCnt := len(tbl)
+	slot := int(h & uint64(len(tbl)-1))
+	n := neighbour
+	if slot+neighbour >= slotCnt {
+		n = slotCnt - slot
+	}
+	if contains(key, &tbl[slot], uint8(n)) {
 		return true
 	}
-	p1 := atomic.LoadPointer(&s.cycle[1])
-	if p1 != nil {
-		tbl1 := *(*[]uint64)(p1)
-		if s.searchTbl(key, tbl1) {
+
+	// 2. If is scaling, searching next table.
+	next := idx ^ 1
+	nextP := atomic.LoadPointer(&s.cycle[next])
+	if nextP == nil {
+		return false
+	}
+	// TODO replace with contains
+	nextT := *(*[]uint64)(nextP)
+	if s.searchTbl(key, nextT) {
+		return true
+	}
+
+	return false
+}
+
+func getHash(idx uint8, key uint64) uint64 {
+	if idx == 0 {
+		return hashFunc0(key)
+	}
+	return hashFunc1(key)
+}
+
+func contains(key uint64, start *uint64, n uint8) bool {
+	var i uint8
+	for ; i < n; i++ {
+		k := atomic.LoadUint64((*uint64)(unsafe.Pointer(uintptr(unsafe.Pointer(start)) + uintptr(i*8))))
+		if k == key {
 			return true
 		}
 	}
@@ -235,21 +293,17 @@ var (
 // TODO check escape
 // hash function for cycle[0]
 var hashFunc0 = func(k uint64) uint64 {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, k)
-	return xxh3.Hash(b) // xxh3 is prefect bijective for 8bytes and blazing fast.
+	return xxh3.HashU64(k, 0) // xxh3 is prefect bijective for 8bytes and blazing fast.
 }
 
 // hash function for cycle[1]
 var hashFunc1 = func(k uint64) uint64 {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, k)
-	return xxhash.Sum64(b) // xxhash is prefect bijective for 8bytes and blazing fast.
+	return xxh3.HashU64(k, 1)
 }
 
 var ErrIsSealed = errors.New("is sealed")
 
-func (s *Set) tryInsert(key uint64) (err error) {
+func (s *Set) tryInsert(key uint64, isLocked bool) (err error) {
 
 	defer func() {
 		if err == nil {
@@ -259,9 +313,11 @@ func (s *Set) tryInsert(key uint64) (err error) {
 
 restart:
 
-	if !s.lock() {
-		pause()
-		goto restart
+	if !isLocked {
+		if !s.lock() {
+			pause()
+			goto restart
+		}
 	}
 
 	if s.isSealed() {
@@ -302,6 +358,7 @@ restart:
 	// 2. Try to Add within neighbour
 	if slotOff < neighbour {
 		atomic.StoreUint64(&tbl[slot+slotOff], key)
+		return nil
 	}
 
 	// 3. Linear probe to find an empty slot and swap.
@@ -311,11 +368,10 @@ restart:
 		if status == swapFull {
 			return ErrIsFull
 		}
-		if status == swapCASFailed {
-			goto restart
-		}
+
 		if free-slot < neighbour {
 			atomic.StoreUint64(&tbl[free], key)
+			return nil
 		}
 		j = free
 	}
@@ -324,7 +380,6 @@ restart:
 const (
 	swapOK = iota
 	swapFull
-	swapCASFailed
 )
 
 // swap swaps the free slot and the another one (closer to the hashed slot).
