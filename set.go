@@ -314,6 +314,7 @@ var hashFunc0 = func(k uint64) uint64 {
 	//return xxh3.HashU64(k, 0) // xxh3 is prefect bijective for 8bytes and blazing fast.
 }
 
+// TODO could make it better?
 func farm32(fid uint64, seed uint32) uint32 {
 	var a, b, c, d uint32
 	a = 8
