@@ -9,19 +9,20 @@ import (
 // TODO remove last_add
 
 // status struct(uint64):
-// 64                                                                   59
-// <----------------------------------------------------------------------
-// | is_running(1) | locked(1) | sealed(1) | is_scaling(1) | writable(1) |
-// 59                       0
+// 64                                                                                  58
+// <------------------------------------------------------------------------------------
+// | is_running(1) | locked(1) | sealed(1) | is_scaling(1) | writable(1) | has_zero(1) |
+// 58                       0
 // <------------------------
-// | padding(27) | cnt(32) |
+// | padding(26) | cnt(32) |
 //
-// is_running: [63]
-// locked: [62]
-// sealed: [61]
-// is_scaling: [60]
-// writable: [59]
-// cnt: [0,32)
+// is_running: [63], is running or not.
+// locked: [62], is locked or not.
+// sealed: [61], seal Set when there is an unexpected failure.
+// is_scaling: [60], Set is expanding/shrinking.
+// writable: [59], writable table index.
+// has_zero: [58], has 0 as key or not.
+// cnt: [0,32), count of added keys.
 
 // IsRunning returns Set is running or not.
 func (s *Set) IsRunning() bool {
@@ -61,7 +62,7 @@ func isLocked(sa uint64) bool {
 
 // create status when New a Set.
 func createStatus() uint64 {
-	return 1<<63 | 1<<58 // set isRunning & table_0 is writable.
+	return 1 << 63 // set isRunning.
 }
 
 // TODO how to deal with sealed. Should pause make bigger table and transfer all data
@@ -116,6 +117,23 @@ func (s *Set) setWritable(idx uint8) {
 		sa |= 1 << 59
 	}
 	atomic.StoreUint64(&s.status, sa)
+}
+
+func (s *Set) addZero() {
+	sa := atomic.LoadUint64(&s.status)
+	sa |= 1 << 58
+	atomic.StoreUint64(&s.status, sa)
+}
+
+func (s *Set) delZero() {
+	sa := atomic.LoadUint64(&s.status)
+	sa ^= 1 << 58
+	atomic.StoreUint64(&s.status, sa)
+}
+
+func (s *Set) hasZero() bool {
+	sa := atomic.LoadUint64(&s.status)
+	return (sa>>58)&1 == 1
 }
 
 // addCnt adds Set count.

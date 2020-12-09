@@ -83,6 +83,21 @@ func TestSet_Scale(t *testing.T) {
 	}
 }
 
+func TestSet_Zero(t *testing.T) {
+	s := New(0)
+	if s.hasZero() {
+		t.Fatal("should not have zero")
+	}
+	s.addZero()
+	if !s.hasZero() {
+		t.Fatal("should have zero")
+	}
+	s.delZero()
+	if s.hasZero() {
+		t.Fatal("should not have zero")
+	}
+}
+
 func TestSet_Cnt(t *testing.T) {
 	s := New(0)
 	for i := 0; i < 1024; i++ {

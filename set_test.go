@@ -61,3 +61,7 @@ func TestIndexSearchPerf(t *testing.T) {
 	ops := float64(end-start) / float64(exp)
 	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
 }
+
+func TestBit(t *testing.T) {
+	fmt.Println(1 << 0)
+}
