@@ -100,9 +100,9 @@ func (s *Set) unScale() {
 	atomic.StoreUint64(&s.status, sa)
 }
 
-// getWritableTable gets writable table in Set.
+// getWritableIdx gets writable table in Set.
 // 0 or 1.
-func (s *Set) getWritableTable() uint8 {
+func (s *Set) getWritableIdx() uint8 {
 	sa := atomic.LoadUint64(&s.status)
 	return uint8((sa >> 59) & 1)
 }

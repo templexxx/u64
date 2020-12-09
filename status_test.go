@@ -22,7 +22,7 @@ func TestSet_Close(t *testing.T) {
 
 func TestCreateStatusWritable(t *testing.T) {
 	s := New(0)
-	if s.getWritableTable() != 0 {
+	if s.getWritableIdx() != 0 {
 		t.Fatal("writable table mismatched")
 	}
 }
@@ -31,11 +31,11 @@ func TestSetWritable(t *testing.T) {
 
 	s := New(0)
 	s.setWritable(1)
-	if s.getWritableTable() != 1 {
+	if s.getWritableIdx() != 1 {
 		t.Fatal("writable table mismatched")
 	}
 	s.setWritable(0)
-	if s.getWritableTable() != 0 {
+	if s.getWritableIdx() != 0 {
 		t.Fatal("writable table mismatched")
 	}
 }
@@ -44,6 +44,10 @@ func TestSetLock(t *testing.T) {
 	s := New(0)
 	if !s.lock() {
 		t.Fatal("lock should be succeed")
+	}
+
+	if s.lock() {
+		t.Fatal("should be locked")
 	}
 
 	sa := atomic.LoadUint64(&s.status)

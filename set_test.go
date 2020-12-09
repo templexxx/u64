@@ -54,7 +54,7 @@ func TestIndexSearchPerf(t *testing.T) {
 	//}
 
 	if has != exp {
-		fmt.Println(s.getWritableTable(), s.isScaling())
+		fmt.Println(s.getWritableIdx(), s.isScaling())
 		t.Fatal("contains mismatch", has, exp, n)
 	}
 	end := tsc.UnixNano()

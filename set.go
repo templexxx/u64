@@ -14,31 +14,21 @@ import (
 	"math/bits"
 	"runtime"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/templexxx/xxh3"
 )
 
 const (
-	defaultShrinkRatio    = 0.25
-	defaultShrinkInterval = 2 * time.Minute
-)
-
-var (
+	defaultShrinkRatio = 0.25
 	// ShrinkRatio is the avail_keys/total_capacity ratio,
 	// when the ratio < ShrinkRatio, indicating Set may need to shrink.
-	// TODO implement ratio checking, too big ratio is meaningless.
 	ShrinkRatio = defaultShrinkRatio
-	// ShrinkDuration is the minimum duration between last add and Set shrink.
-	// When now - last_add > ShrinkDuration & avail_keys/total_capacity < ShrinkRatio & it's the writable slice,
-	// shrink will happen.
-	// TODO implement duration checking, too big or too small duration is meaningless.
-	ShrinkDuration = defaultShrinkInterval
 )
 
 // neighbour is the hopscotch hash neighbourhood size.
 //
+// TODO testing the load factor
 // P is the probability a hopscotch hash table with load factor 0.75
 // and the neighborhood size 32 must be rehashed:
 // 3.81e-40 < P < 1e-4
@@ -53,7 +43,7 @@ type Set struct {
 	// _padding here for avoiding false share.
 	// cycle which under the status won't be modified frequently, but read frequently.
 	//
-	// TODO may don't need it because the the write operations aren't many, few cache miss is okay.
+	// may don't need it because the the write operations aren't many, few cache miss is okay.
 	// remove it could save 128 bytes, it's attractive for application which want to save every bit.
 	// _padding [cpu.X86FalseSharingRange]byte
 
@@ -78,16 +68,25 @@ func calcMask(tableCap uint32) uint32 {
 	if tableCap <= neighbour {
 		return tableCap - 1
 	}
-	return tableCap - 64 // Always has a virtual bucket with neigh slots.
+	return tableCap - neighbour // Always has a virtual bucket with neigh slots.
 }
 
-// calcTableCap calculates the real capacity of a table.
-// TODO
+// calcTableCap calculates the actual capacity of a table.
+// This capacity will add a bit extra slots for improving load factor hugely.
 func calcTableCap(c int) int {
 	if c <= neighbour {
 		return c
 	}
-	return c + 63
+	return c + neighbour - 1
+}
+
+// backToOriginCap calculates the origin capacity by actual capacity.
+// The origin capacity will be the visible capacity outside.
+func backToOriginCap(c int) int {
+	if c <= neighbour {
+		return c
+	}
+	return c + 1 - neighbour
 }
 
 // New creates a new Set.
@@ -140,7 +139,6 @@ var (
 // Warning:
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
-// TODO if there is two keys' slots is last slot, will be full, deal with it
 func (s *Set) Add(key uint64) error {
 
 	if !s.IsRunning() {
@@ -156,17 +154,17 @@ func (s *Set) Add(key uint64) error {
 		}
 
 		// Try to expand.
-		idx := s.getWritableTable()
+		idx := s.getWritableIdx()
 		p := atomic.LoadPointer(&s.cycle[idx])
 		tbl := *(*[]uint64)(p)
-		// TODO func to back to origin cap
-		if len(tbl)*2 > MaxCap {
+		oc := backToOriginCap(len(tbl))
+		if oc*2 > MaxCap {
 			s.unlock()
 			return ErrIsFull
 		}
 
 		next := idx ^ 1
-		newTbl := make([]uint64, len(tbl)*2)
+		newTbl := make([]uint64, calcTableCap(oc*2))
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
 		s.setWritable(next)
 		s.scale()
@@ -185,9 +183,15 @@ func (s *Set) Restart() {
 
 }
 
-// TODO GetUsage returns capacity & usage.
-func (s *Set) GetUsage() {
+// GetUsage returns Set capacity & usage.
+func (s *Set) GetUsage() (total, usage int) {
+	return len(s.getWritableTable()), int(s.getCnt())
+}
 
+func (s *Set) getWritableTable() []uint64 {
+	idx := s.getWritableIdx()
+	p := atomic.LoadPointer(&s.cycle[idx])
+	return *(*[]uint64)(p)
 }
 
 func (s *Set) expand(ri int) {
@@ -234,7 +238,7 @@ func (s *Set) expand(ri int) {
 func (s *Set) Contains(key uint64) bool {
 
 	// 1. Search writable table first.
-	idx := s.getWritableTable()
+	idx := s.getWritableIdx()
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 
@@ -397,7 +401,7 @@ restart:
 		return ErrIsSealed
 	}
 
-	idx := s.getWritableTable()
+	idx := s.getWritableIdx()
 
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
