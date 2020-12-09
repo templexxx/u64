@@ -1,6 +1,7 @@
 package u64
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/templexxx/tsc"
@@ -52,9 +53,10 @@ func TestIndexSearchPerf(t *testing.T) {
 	//	}
 	//}
 
-	//if has != exp {
-	//	t.Fatal("contains mismatch", has, exp)
-	//}
+	if has != exp {
+		fmt.Println(s.getWritableTable(), s.isScaling())
+		t.Fatal("contains mismatch", has, exp, n)
+	}
 	end := tsc.UnixNano()
 	ops := float64(end-start) / float64(exp)
 	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))

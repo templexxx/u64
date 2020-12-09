@@ -219,9 +219,9 @@ func (s *Set) Contains(key uint64) bool {
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 
-	//if s.searchTbl(key, tbl) {
-	//	return true
-	//}
+	// if s.searchTbl(key, tbl) {
+	// 	return true
+	// }
 	h := getHash(idx, key)
 	slotCnt := len(tbl)
 	slot := int(h & uint64(len(tbl)-1))
@@ -229,11 +229,14 @@ func (s *Set) Contains(key uint64) bool {
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
 	}
-	if contains(key, &tbl[slot], uint8(n)) {
+	if contains(key, tbl, slot, n) {
 		return true
 	}
 
 	// 2. If is scaling, searching next table.
+	if !s.isScaling() {
+		return false
+	}
 	next := idx ^ 1
 	nextP := atomic.LoadPointer(&s.cycle[next])
 	if nextP == nil {
@@ -241,11 +244,7 @@ func (s *Set) Contains(key uint64) bool {
 	}
 	// TODO replace with contains
 	nextT := *(*[]uint64)(nextP)
-	if s.searchTbl(key, nextT) {
-		return true
-	}
-
-	return false
+	return s.searchTbl(key, nextT)
 }
 
 func getHash(idx uint8, key uint64) uint64 {
@@ -255,10 +254,10 @@ func getHash(idx uint8, key uint64) uint64 {
 	return hashFunc1(key)
 }
 
-func contains(key uint64, start *uint64, n uint8) bool {
-	var i uint8
-	for ; i < n; i++ {
-		k := atomic.LoadUint64((*uint64)(unsafe.Pointer(uintptr(unsafe.Pointer(start)) + uintptr(i*8))))
+func contains(key uint64, tbl []uint64, slot, n int) bool {
+
+	for i := 0; i < n; i++ {
+		k := atomic.LoadUint64(&tbl[slot+i])
 		if k == key {
 			return true
 		}
