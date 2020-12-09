@@ -237,6 +237,10 @@ func (s *Set) expand(ri int) {
 // Contains returns the key in set or not.
 func (s *Set) Contains(key uint64) bool {
 
+	if key == 0 {
+		return s.hasZero()
+	}
+
 	// 1. Search writable table first.
 	idx := s.getWritableIdx()
 	p := atomic.LoadPointer(&s.cycle[idx])
@@ -399,6 +403,11 @@ restart:
 
 	if s.isSealed() {
 		return ErrIsSealed
+	}
+
+	if key == 0 {
+		s.addZero()
+		return nil
 	}
 
 	idx := s.getWritableIdx()
