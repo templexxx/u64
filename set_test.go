@@ -7,37 +7,18 @@ import (
 	"github.com/templexxx/tsc"
 )
 
-func TestNextPower2(t *testing.T) {
-	for i := 0; i <= 1025; i++ {
-		p := nextPower2(uint64(i))
-		if p != slowNextPower2(uint64(i)) {
-			t.Fatal("power2 mismatch", p, i)
-		}
-	}
-}
-
-func slowNextPower2(n uint64) uint64 {
-	var p uint64 = 1
-	for {
-		if p < n {
-			p *= 2
-		} else {
-			break
-		}
-	}
-	return p
-}
-
 func TestIndexSearchPerf(t *testing.T) {
 
 	n := 1024 * 1024
+	// m := make(map[uint64]struct{}, n)
 	s := New(n * 2)
 	exp := n
-	for i := 1; i < n+1; i++ { // TODO add a flag has 0
+	for i := 1; i < n+1; i++ {
 		err := s.Add(uint64(i))
 		if err != nil {
 			exp--
 		}
+		// m[uint64(i)] = struct{}{}
 	}
 
 	start := tsc.UnixNano()
@@ -46,12 +27,15 @@ func TestIndexSearchPerf(t *testing.T) {
 		if s.Contains(uint64(i)) {
 			has++
 		}
+		// if _, ok := m[uint64(i)]; ok {
+		// 	has++
+		// }
 	}
-	//for j := 0; j < 10; j++ {
-	//	for i := 1; i < n+1; i++ {
-	//		s.Contains(uint64(i))
-	//	}
-	//}
+	// for j := 0; j < 10; j++ {
+	// 	for i := 1; i < n+1; i++ {
+	// 		s.Contains(uint64(i))
+	// 	}
+	// }
 
 	if has != exp {
 		fmt.Println(s.getWritableIdx(), s.isScaling())

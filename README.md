@@ -38,6 +38,8 @@ Compare benchmark:
 1. The maximum size of set is 32Mi, but big enough for most cases. I set the limitation for avoiding unexpected memory
 usage.
 
+2. Only supports X86-64 platform.
+
 ## Other Set Implementations
 
 ### Tree

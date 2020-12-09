@@ -3,25 +3,19 @@
 // Entry container.
 // Neighbourhood:
 // Key could be found in slot which hashed to or next Neighbourhood - 1 slots.
-// Bucket:
+//
+// 2. Bucket:
 // It's a virtual struct made of neighbourhood slots.
-// Table:
+//
+// 3. Table:
 // An array of buckets.
 package u64
 
 import (
 	"errors"
-	"math/bits"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
-)
-
-const (
-	defaultShrinkRatio = 0.25
-	// ShrinkRatio is the avail_keys/total_capacity ratio,
-	// when the ratio < ShrinkRatio, indicating Set may need to shrink.
-	ShrinkRatio = defaultShrinkRatio
 )
 
 // neighbour is the hopscotch hash neighbourhood size.
@@ -61,32 +55,6 @@ const (
 	MaxCap = defaultMaxCap
 )
 
-// calcMask calculates mask for slot = hash & mask.
-func calcMask(tableCap uint32) uint32 {
-	if tableCap <= neighbour {
-		return tableCap - 1
-	}
-	return tableCap - neighbour // Always has a virtual bucket with neigh slots.
-}
-
-// calcTableCap calculates the actual capacity of a table.
-// This capacity will add a bit extra slots for improving load factor hugely.
-func calcTableCap(c int) int {
-	if c <= neighbour {
-		return c
-	}
-	return c + neighbour - 1
-}
-
-// backToOriginCap calculates the origin capacity by actual capacity.
-// The origin capacity will be the visible capacity outside.
-func backToOriginCap(c int) int {
-	if c <= neighbour {
-		return c
-	}
-	return c + 1 - neighbour
-}
-
 // New creates a new Set.
 // cap is the set capacity at the beginning,
 // Set will grow if no bucket to add until meet MaxCap.
@@ -104,7 +72,7 @@ func New(cap int) *Set {
 	}
 
 	cap = calcTableCap(cap)
-	bkt0 := make([]uint64, cap, cap) // Create one bucket at the beginning.
+	bkt0 := make([]uint64, cap, cap) // Create one table at the beginning.
 	return &Set{
 		status: createStatus(),
 		cycle:  [2]unsafe.Pointer{unsafe.Pointer(&bkt0)},
@@ -118,25 +86,18 @@ func (s *Set) Close() {
 	atomic.StorePointer(&s.cycle[1], nil)
 }
 
-func nextPower2(n uint64) uint64 {
-	if n <= 1 {
-		return 1
-	}
-
-	return 1 << (64 - bits.LeadingZeros64(n-1)) // TODO may use BSR instruction.
-}
-
 var (
 	ErrIsClosed   = errors.New("is closed")
-	ErrAddTooFast = errors.New("add too fast")
+	ErrAddTooFast = errors.New("add too fast") // Cycle being caught up.
+	ErrIsFull     = errors.New("set is full")
+	ErrIsSealed   = errors.New("is sealed")
 )
 
 // Add adds key into Set.
 // Return nil if succeed.
 //
-// Warning:
-// There must be only one goroutine tries to Add at the same time
-// (both of insert and Remove must use the same goroutine).
+// P.S.:
+// It's better to use only one goroutine to Add at the same time.
 func (s *Set) Add(key uint64) error {
 
 	if !s.IsRunning() {
@@ -151,7 +112,7 @@ func (s *Set) Add(key uint64) error {
 			return ErrAddTooFast
 		}
 
-		// Try to expand.
+		// Last writable table is full, try to expand to new table.
 		idx := s.getWritableIdx()
 		p := atomic.LoadPointer(&s.cycle[idx])
 		tbl := *(*[]uint64)(p)
@@ -166,7 +127,7 @@ func (s *Set) Add(key uint64) error {
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
 		s.setWritable(next)
 		s.scale()
-		_ = s.tryInsert(key, true) // First insert can't fail.
+		_ = s.tryInsert(key, true) // First insert must be succeed.
 		go s.expand(int(idx))
 		s.unlock()
 		return nil
@@ -186,10 +147,17 @@ func (s *Set) GetUsage() (total, usage int) {
 	return len(s.getWritableTable()), int(s.getCnt())
 }
 
-func (s *Set) getWritableTable() []uint64 {
-	idx := s.getWritableIdx()
-	p := atomic.LoadPointer(&s.cycle[idx])
-	return *(*[]uint64)(p)
+const (
+	defaultShrinkRatio = 0.25
+	// ShrinkRatio is the avail_keys/total_capacity ratio,
+	// when the ratio < ShrinkRatio, indicating Set may need to shrink.
+	ShrinkRatio = defaultShrinkRatio
+)
+
+// TODO
+// Shrink tries to shrink Set if could.
+func (s *Set) Shrink() {
+
 }
 
 func (s *Set) expand(ri int) {
@@ -240,13 +208,8 @@ func (s *Set) Contains(key uint64) bool {
 	}
 
 	// 1. Search writable table first.
-	idx := s.getWritableIdx()
-	p := atomic.LoadPointer(&s.cycle[idx])
-	tbl := *(*[]uint64)(p)
-
-	h := calcHash(idx, key)
+	idx, tbl, slot := s.getTblSlot(key)
 	slotCnt := len(tbl)
-	slot := int(h & (calcMask(uint32(slotCnt))))
 	n := neighbour
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
@@ -260,20 +223,16 @@ func (s *Set) Contains(key uint64) bool {
 		return false
 	}
 	next := idx ^ 1
-	nextP := atomic.LoadPointer(&s.cycle[next])
-	if nextP == nil {
+	tbl, slot = s.getTblSlotByIdx(next, key)
+	if tbl == nil {
 		return false
 	}
-	// TODO replace with contains
-	nextT := *(*[]uint64)(nextP)
-	h = calcHash(next, key)
-	slotCnt = len(nextT)
-	slot = int(h & (calcMask(uint32(slotCnt))))
+	slotCnt = len(tbl)
 	n = neighbour
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
 	}
-	return contains(key, nextT, slot, n)
+	return contains(key, tbl, slot, n)
 }
 
 func contains(key uint64, tbl []uint64, slot, n int) bool {
@@ -285,6 +244,86 @@ func contains(key uint64, tbl []uint64, slot, n int) bool {
 		}
 	}
 	return false
+}
+
+// Remove removes key in Set.
+func (s *Set) Remove(key uint64) {
+	if !s.IsRunning() {
+		return
+	}
+	_ = s.tryRemove(key)
+}
+
+func (s *Set) tryRemove(key uint64) (err error) {
+
+	defer func() {
+		if err == nil {
+			s.delCnt()
+		}
+	}()
+
+restart:
+
+	if !s.lock() {
+		pause()
+		goto restart
+	}
+
+	if s.isSealed() {
+		return ErrIsSealed
+	}
+
+	if key == 0 {
+		s.delZero()
+		return nil
+	}
+
+	idx := s.getWritableIdx()
+
+	p := atomic.LoadPointer(&s.cycle[idx])
+	tbl := *(*[]uint64)(p)
+	slotCnt := len(tbl)
+	mask := calcMask(uint32(slotCnt))
+
+	h := calcHash(idx, key)
+
+	slot := int(h & mask)
+
+	// 1. Ensure key is unique.
+	slotOff := neighbour // slotOff is the distance between avail slot from hashed slot.
+	for i := 0; i < neighbour && slot+i < slotCnt; i++ {
+		k := atomic.LoadUint64(&tbl[slot+i])
+		if k == key {
+			return nil // If already contains, do nothing.
+		}
+		if k == 0 {
+			if i < slotOff {
+				slotOff = i
+			}
+			continue // Go on trying to find the same key.
+		}
+	}
+
+	// 2. Try to Add within neighbour
+	if slotOff < neighbour {
+		atomic.StoreUint64(&tbl[slot+slotOff], key)
+		return nil
+	}
+
+	// 3. Linear probe to find an empty slot and swap.
+	j := slot + neighbour
+	for { // Closer and closer.
+		free, status := s.swap(j, slotCnt, tbl, idx)
+		if status == swapFull {
+			return ErrIsFull
+		}
+
+		if free-slot < neighbour {
+			atomic.StoreUint64(&tbl[free], key)
+			return nil
+		}
+		j = free
+	}
 }
 
 // Remove removes key in set.
@@ -306,13 +345,6 @@ func contains(key uint64, tbl []uint64, slot, n int) bool {
 //		}
 //	}
 //}
-
-var (
-	ErrIsFull   = errors.New("set is full")
-	ErrNotFound = errors.New("not found")
-)
-
-var ErrIsSealed = errors.New("is sealed")
 
 func (s *Set) tryInsert(key uint64, isLocked bool) (err error) {
 

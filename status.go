@@ -108,6 +108,10 @@ func (s *Set) getWritableIdx() uint8 {
 	return uint8((sa >> 59) & 1)
 }
 
+func getWritableIdxByStatus(sa uint64) uint8 {
+	return uint8((sa >> 59) & 1)
+}
+
 // setWritable sets writable table index.
 func (s *Set) setWritable(idx uint8) {
 	sa := atomic.LoadUint64(&s.status)

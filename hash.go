@@ -1,10 +1,15 @@
 package u64
 
-import "math/bits"
+import (
+	"math/bits"
+
+	"github.com/templexxx/xxh3"
+)
 
 func calcHash(idx uint8, key uint64) uint32 {
 	if idx == 0 {
-		return hash32(key, 0)
+		return uint32(xxh3.HashU64(key, 0))
+		// return hash32(key, 0)
 	}
 	return hash32(key, 1)
 }
