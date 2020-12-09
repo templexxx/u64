@@ -14,11 +14,13 @@ Unsigned 64-bit Integer Set in Go.
 >
 >- **Auto Scaling**
 >
->   Shrinking automatically: If there is no new key for a long time(default: 2minutes), and the most part of buckets are
->   garbage(default: 1/4 usage), the set will try to shrink.
+>   Expand automatically: When meet ErrNoSpace, it'll trigger expanding in async mode. The size will grow up to 2x as before.
 >
->   Expand automatically: When meet ErrNoSpace, it'll trigger expanding. The size will grow up to 2x as before.
->
+>   Shrinking manually: Users could get usage of set and try to trigger shrinking or not. The set will decide to do this job in async.
+>   
+>       Automatically shrinking needs extra information to make decision, it may bring unstable overhead(e.g. last modified need
+>       get clock). So it's wiser to do such things in high level, because users may already have these helping information, there
+>       is no need to do the same jobs in set.
 
 ## Performance Tuning
 
