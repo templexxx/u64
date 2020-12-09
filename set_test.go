@@ -62,6 +62,16 @@ func TestIndexSearchPerf(t *testing.T) {
 	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
 }
 
-func TestBit(t *testing.T) {
-	fmt.Println(1 << 0)
+func TestSet_AddZero(t *testing.T) {
+	s := New(0)
+	if s.Contains(0) {
+		t.Fatal("should not have 0")
+	}
+	err := s.Add(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Contains(0) {
+		t.Fatal("should have 0")
+	}
 }
