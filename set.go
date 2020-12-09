@@ -23,8 +23,6 @@ import (
 const (
 	defaultShrinkRatio    = 0.25
 	defaultShrinkInterval = 2 * time.Minute
-	// defaultMaxCap is the default maximum capacity of Set.
-	defaultMaxCap = 1 << 25 // 32Mi * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
 )
 
 var (
@@ -38,10 +36,6 @@ var (
 	// TODO implement duration checking, too big or too small duration is meaningless.
 	ShrinkDuration = defaultShrinkInterval
 )
-
-// MaxCap is the maximum capacity of Set.
-// The real max number of keys may be around 0.8~0.9 * MaxCap.
-const MaxCap = defaultMaxCap
 
 // neighbour is the hopscotch hash neighbourhood size.
 //
@@ -70,9 +64,31 @@ type Set struct {
 }
 
 const (
+	// defaultMaxCap is the default maximum capacity of Set.
+	defaultMaxCap = 1 << 25 // 32Mi * 8 Byte = 256MB, big enough for most cases. Avoiding unexpected memory usage.
 	// Start with a minCap, saving memory.
 	minCap = 2
+	// MaxCap is the maximum capacity of Set.
+	// The real max number of keys may be around 0.8~0.9 * MaxCap.
+	MaxCap = defaultMaxCap
 )
+
+// calcMask calculates mask for slot = hash & mask.
+func calcMask(tableCap uint32) uint32 {
+	if tableCap <= neighbour {
+		return tableCap - 1
+	}
+	return tableCap - 64 // Always has a virtual bucket with neigh slots.
+}
+
+// calcTableCap calculates the real capacity of a table.
+// TODO
+func calcTableCap(c int) int {
+	if c <= neighbour {
+		return c
+	}
+	return c + 63
+}
 
 // New creates a new Set.
 // cap is the set capacity at the beginning,
@@ -90,6 +106,7 @@ func New(cap int) *Set {
 		cap = MaxCap
 	}
 
+	cap = calcTableCap(cap)
 	bkt0 := make([]uint64, cap, cap) // Create one bucket at the beginning.
 	return &Set{
 		status: createStatus(),
@@ -123,6 +140,7 @@ var (
 // Warning:
 // There must be only one goroutine tries to Add at the same time
 // (both of insert and Remove must use the same goroutine).
+// TODO if there is two keys' slots is last slot, will be full, deal with it
 func (s *Set) Add(key uint64) error {
 
 	if !s.IsRunning() {
@@ -141,6 +159,7 @@ func (s *Set) Add(key uint64) error {
 		idx := s.getWritableTable()
 		p := atomic.LoadPointer(&s.cycle[idx])
 		tbl := *(*[]uint64)(p)
+		// TODO func to back to origin cap
 		if len(tbl)*2 > MaxCap {
 			s.unlock()
 			return ErrIsFull
@@ -224,7 +243,7 @@ func (s *Set) Contains(key uint64) bool {
 	// }
 	h := getHash(idx, key)
 	slotCnt := len(tbl)
-	slot := int(h & uint64(len(tbl)-1))
+	slot := int(h & uint64(calcMask(uint32(slotCnt))))
 	n := neighbour
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
@@ -269,7 +288,7 @@ func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
 
 	h := hashFunc0(key)
 	slotCnt := len(tbl)
-	slot := int(h & uint64(len(tbl)-1))
+	slot := int(h & uint64(calcMask(uint32(slotCnt))))
 
 	for i := 0; i < neighbour && i+slot < slotCnt; i++ {
 		k := atomic.LoadUint64(&tbl[slot+i])
@@ -383,7 +402,7 @@ restart:
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 	slotCnt := len(tbl)
-	mask := uint64(len(tbl) - 1)
+	mask := uint64(calcMask(uint32(slotCnt)))
 
 	var hashFunc = hashFunc0
 	if idx == 1 {
@@ -438,10 +457,10 @@ const (
 
 // swap swaps the free slot and the another one (closer to the hashed slot).
 // Return position & swapOK if find one.
-func (s *Set) swap(start, bktCnt int, tbl []uint64) (int, uint8) {
+func (s *Set) swap(start, slotCnt int, tbl []uint64) (int, uint8) {
 
-	mask := uint64(len(tbl) - 1)
-	for i := start; i < bktCnt; i++ {
+	mask := uint64(calcMask(uint32(slotCnt)))
+	for i := start; i < slotCnt; i++ {
 		if atomic.LoadUint64(&tbl[i]) == 0 { // Find a free one.
 			j := i - neighbour + 1
 			if j < 0 {
