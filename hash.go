@@ -6,12 +6,14 @@ import (
 	"github.com/templexxx/xxh3"
 )
 
+// TODO xxh3 is faster and load factor is good enough(need more testing)
 func calcHash(idx uint8, key uint64) uint32 {
 	if idx == 0 {
 		return uint32(xxh3.HashU64(key, 0))
 		// return hash32(key, 0)
 	}
-	return hash32(key, 1)
+	return uint32(xxh3.HashU64(key, 1))
+	// return hash32(key, 1)
 }
 
 func hash32(key uint64, seed uint32) uint32 {

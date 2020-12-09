@@ -207,15 +207,25 @@ func (s *Set) Contains(key uint64) bool {
 		return s.hasZero()
 	}
 
+	sa := atomic.LoadUint64(&s.status)
+
 	// 1. Search writable table first.
-	idx, tbl, slot := s.getTblSlot(key)
-	slotCnt := len(tbl)
-	n := neighbour
-	if slot+neighbour >= slotCnt {
-		n = slotCnt - slot
-	}
-	if contains(key, tbl, slot, n) {
-		return true
+	idx, tbl, slot := s.getTblSlot(sa, key)
+	if tbl != nil {
+		slotCnt := len(tbl)
+		n := neighbour
+		if slot+neighbour >= slotCnt {
+			n = slotCnt - slot
+		}
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&tbl[slot+i])
+			if k == key {
+				return true
+			}
+		}
+		// if contains(key, tbl, slot, n) {
+		// 	return true
+		// }
 	}
 
 	// 2. If is scaling, searching next table.
@@ -227,16 +237,17 @@ func (s *Set) Contains(key uint64) bool {
 	if tbl == nil {
 		return false
 	}
-	slotCnt = len(tbl)
-	n = neighbour
+	slotCnt := len(tbl)
+	n := neighbour
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
 	}
 	return contains(key, tbl, slot, n)
 }
 
-func contains(key uint64, tbl []uint64, slot, n int) bool {
+var contains = containsGeneric
 
+func containsGeneric(key uint64, tbl []uint64, slot, n int) bool {
 	for i := 0; i < n; i++ {
 		k := atomic.LoadUint64(&tbl[slot+i])
 		if k == key {

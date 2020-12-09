@@ -2,6 +2,8 @@ package u64
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/templexxx/tsc"
@@ -58,4 +60,32 @@ func TestSet_AddZero(t *testing.T) {
 	if !s.Contains(0) {
 		t.Fatal("should have 0")
 	}
+}
+
+func TestConcurrentPerf(t *testing.T) {
+	n := 1024 * 1024
+	s := New(n * 2)
+	for i := 0; i < n; i++ {
+		err := s.Add(uint64(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gn := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	wg.Add(gn)
+	start := tsc.UnixNano()
+	for i := 0; i < gn; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < n; j++ {
+				_ = s.Contains(uint64(j))
+			}
+		}()
+	}
+	wg.Wait()
+	end := tsc.UnixNano()
+	ops := float64(end-start) / float64(n*gn)
+	t.Logf("total op: %d, cost: %dns, index search perf: %.2f ns/op, thread: %d", n*gn, end-start, ops, gn)
 }
