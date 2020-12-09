@@ -15,8 +15,6 @@ import (
 	"runtime"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/templexxx/xxh3"
 )
 
 const (
@@ -246,12 +244,9 @@ func (s *Set) Contains(key uint64) bool {
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 
-	// if s.searchTbl(key, tbl) {
-	// 	return true
-	// }
-	h := getHash(idx, key)
+	h := calcHash(idx, key)
 	slotCnt := len(tbl)
-	slot := int(h & uint64(calcMask(uint32(slotCnt))))
+	slot := int(h & (calcMask(uint32(slotCnt))))
 	n := neighbour
 	if slot+neighbour >= slotCnt {
 		n = slotCnt - slot
@@ -271,14 +266,14 @@ func (s *Set) Contains(key uint64) bool {
 	}
 	// TODO replace with contains
 	nextT := *(*[]uint64)(nextP)
-	return s.searchTbl(key, nextT)
-}
-
-func getHash(idx uint8, key uint64) uint64 {
-	if idx == 0 {
-		return hashFunc0(key)
+	h = calcHash(next, key)
+	slotCnt = len(nextT)
+	slot = int(h & (calcMask(uint32(slotCnt))))
+	n = neighbour
+	if slot+neighbour >= slotCnt {
+		n = slotCnt - slot
 	}
-	return hashFunc1(key)
+	return contains(key, nextT, slot, n)
 }
 
 func contains(key uint64, tbl []uint64, slot, n int) bool {
@@ -289,22 +284,6 @@ func contains(key uint64, tbl []uint64, slot, n int) bool {
 			return true
 		}
 	}
-	return false
-}
-
-func (s *Set) searchTbl(key uint64, tbl []uint64) bool {
-
-	h := hashFunc0(key)
-	slotCnt := len(tbl)
-	slot := int(h & uint64(calcMask(uint32(slotCnt))))
-
-	for i := 0; i < neighbour && i+slot < slotCnt; i++ {
-		k := atomic.LoadUint64(&tbl[slot+i])
-		if k == key {
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -332,55 +311,6 @@ var (
 	ErrIsFull   = errors.New("set is full")
 	ErrNotFound = errors.New("not found")
 )
-
-// TODO check escape
-// hash function for cycle[0]
-var hashFunc0 = func(k uint64) uint64 {
-	return uint64(farm32(k, 0))
-	//return xxh3.HashU64(k, 0) // xxh3 is prefect bijective for 8bytes and blazing fast.
-}
-
-// TODO could make it better?
-func farm32(fid uint64, seed uint32) uint32 {
-	var a, b, c, d uint32
-	a = 8
-	b = 40
-	c = 9
-	d = b + seed
-	a += uint32(fid << 32 >> 32)
-	b += uint32(fid >> 32)
-	c += uint32(fid >> 32)
-	return fmix(seed ^ mur(c, mur(b, mur(a, d))))
-}
-
-// Magic numbers for 32-bit hashing.  Copied from Murmur3.
-const c1 uint32 = 0xcc9e2d51
-const c2 uint32 = 0x1b873593
-
-func mur(a, h uint32) uint32 {
-	// Helper from Murmur3 for combining two 32-bit values.
-	a *= c1
-	a = bits.RotateLeft32(a, -17)
-	a *= c2
-	h ^= a
-	h = bits.RotateLeft32(h, -19)
-	return h*5 + 0xe6546b64
-}
-
-// A 32-bit to 32-bit integer hash copied from Murmur3.
-func fmix(h uint32) uint32 {
-	h ^= h >> 16
-	h *= 0x85ebca6b
-	h ^= h >> 13
-	h *= 0xc2b2ae35
-	h ^= h >> 16
-	return h
-}
-
-// hash function for cycle[1]
-var hashFunc1 = func(k uint64) uint64 {
-	return xxh3.HashU64(k, 1)
-}
 
 var ErrIsSealed = errors.New("is sealed")
 
@@ -415,14 +345,9 @@ restart:
 	p := atomic.LoadPointer(&s.cycle[idx])
 	tbl := *(*[]uint64)(p)
 	slotCnt := len(tbl)
-	mask := uint64(calcMask(uint32(slotCnt)))
+	mask := calcMask(uint32(slotCnt))
 
-	var hashFunc = hashFunc0
-	if idx == 1 {
-		hashFunc = hashFunc1
-	}
-
-	h := hashFunc(key)
+	h := calcHash(idx, key)
 
 	slot := int(h & mask)
 
@@ -450,7 +375,7 @@ restart:
 	// 3. Linear probe to find an empty slot and swap.
 	j := slot + neighbour
 	for { // Closer and closer.
-		free, status := s.swap(j, slotCnt, tbl)
+		free, status := s.swap(j, slotCnt, tbl, idx)
 		if status == swapFull {
 			return ErrIsFull
 		}
@@ -470,9 +395,9 @@ const (
 
 // swap swaps the free slot and the another one (closer to the hashed slot).
 // Return position & swapOK if find one.
-func (s *Set) swap(start, slotCnt int, tbl []uint64) (int, uint8) {
+func (s *Set) swap(start, slotCnt int, tbl []uint64, idx uint8) (int, uint8) {
 
-	mask := uint64(calcMask(uint32(slotCnt)))
+	mask := calcMask(uint32(slotCnt))
 	for i := start; i < slotCnt; i++ {
 		if atomic.LoadUint64(&tbl[i]) == 0 { // Find a free one.
 			j := i - neighbour + 1
@@ -481,7 +406,7 @@ func (s *Set) swap(start, slotCnt int, tbl []uint64) (int, uint8) {
 			}
 			for ; j < i; j++ { // Search start at the closet position.
 				k := atomic.LoadUint64(&tbl[j])
-				slot := int(hashFunc0(k) & mask)
+				slot := int(calcHash(idx, k) & mask)
 				if i-slot < neighbour {
 					atomic.StoreUint64(&tbl[i], k)
 					atomic.StoreUint64(&tbl[j], 0)

@@ -14,9 +14,9 @@ func TestMitFull(t *testing.T) {
 	for i := 0; i < n; i++ {
 		// TODO try to use a pseudo-random number
 		// TODO two version, seq number & random number
-		err := s.Add(uint64(i * 2)) // i*2 in farm32 is 0.36, when n = 1024 * 1024.
+		err := s.Add(uint64(i * 2)) // i*2 in hash32 is 0.36, when n = 1024 * 1024.
 		if err == ErrAddTooFast {
-			slot := farm32(uint64(i*2), 0) & uint32(n-1)
+			slot := hash32(uint64(i*2), 0) & uint32(n-1)
 			fmt.Println(i*2, slot)
 			table := *(*[]uint64)(s.cycle[0])
 			n2 := int(slot) + neighbour
