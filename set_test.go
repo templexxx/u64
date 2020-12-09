@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/templexxx/tsc"
 )
@@ -87,5 +88,7 @@ func TestConcurrentPerf(t *testing.T) {
 	wg.Wait()
 	end := tsc.UnixNano()
 	ops := float64(end-start) / float64(n*gn)
-	t.Logf("total op: %d, cost: %dns, index search perf: %.2f ns/op, thread: %d", n*gn, end-start, ops, gn)
+	iops := float64(n*gn) / (float64(end-start) / float64(time.Second))
+	t.Logf("total op: %d, cost: %dns, thread: %d;"+
+		"index search perf: %.2f ns/op, %.2f op/s", n*gn, end-start, gn, ops, iops)
 }
