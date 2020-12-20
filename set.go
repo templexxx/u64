@@ -1,6 +1,8 @@
 // Key Concepts:
+//
 // 1. Slot:
 // Entry container.
+//
 // Neighbourhood:
 // Key could be found in slot which hashed to or next Neighbourhood - 1 slots.
 //
