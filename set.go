@@ -42,6 +42,7 @@ type Set struct {
 	// status is a set of flags of Set, see status.go for more details.
 	status uint64
 	// cycle is the container of tables,
+	// it's made of two uint64 slices.
 	// only the one could be inserted at a certain time.
 	cycle [2]unsafe.Pointer
 }
@@ -88,7 +89,8 @@ var (
 // Return nil if succeed.
 //
 // P.S.:
-// It's better to use only one goroutine to Add at the same time.
+// It's better to use only one goroutine to Add at the same time,
+// it'll be more friendly for optimistic lock used by Set.
 func (s *Set) Add(key uint64) error {
 
 	if !s.IsRunning() {
@@ -110,7 +112,7 @@ func (s *Set) Add(key uint64) error {
 		oc := backToOriginCap(len(tbl))
 		if oc*2 > MaxCap {
 			s.unlock()
-			return ErrIsFull
+			return ErrIsFull // Already MaxCap.
 		}
 
 		next := idx ^ 1
@@ -128,69 +130,6 @@ func (s *Set) Add(key uint64) error {
 	}
 }
 
-// TODO Restart restarts Set, replay scaling
-func (s *Set) Restart() {
-
-}
-
-// GetUsage returns Set capacity & usage.
-func (s *Set) GetUsage() (total, usage int) {
-	return len(s.getWritableTable()), int(s.getCnt())
-}
-
-const (
-	defaultShrinkRatio = 0.25
-	// ShrinkRatio is the avail_keys/total_capacity ratio,
-	// when the ratio < ShrinkRatio, indicating Set may need to shrink.
-	ShrinkRatio = defaultShrinkRatio
-)
-
-// TODO
-// Shrink tries to shrink Set if could.
-func (s *Set) Shrink() {
-
-}
-
-func (s *Set) expand(ri int) {
-	rp := atomic.LoadPointer(&s.cycle[ri])
-	src := *(*[]uint64)(rp)
-
-	n, cnt := len(src), 0
-	for i := range src {
-
-		if !s.IsRunning() {
-			return
-		}
-
-		if cnt >= 10 {
-			cnt = 0
-			runtime.Gosched()
-		}
-		s.lock()
-		v := atomic.LoadUint64(&src[i])
-		if v != 0 {
-			err := s.tryInsert(v, true)
-			if err == ErrIsFull {
-				s.seal()
-				s.unlock()
-				return
-			}
-			cnt++
-		}
-		if i == n-1 { // Last one is finished.
-			atomic.StorePointer(&s.cycle[ri], unsafe.Pointer(nil))
-			s.unScale()
-		}
-		s.unlock()
-	}
-}
-
-// TODO Contains logic:
-// 1. VPBBROADCASTQ 8byte->32byte 1
-// 2. VPCMPEQQ	2
-// 3. VPTEST Y0, Y0	3
-//
-//
 // Contains returns the key in set or not.
 func (s *Set) Contains(key uint64) bool {
 
@@ -214,9 +153,6 @@ func (s *Set) Contains(key uint64) bool {
 				return true
 			}
 		}
-		// if contains(key, tbl, slot, n) {
-		// 	return true
-		// }
 	}
 
 	// 2. If is scaling, searching next table.
@@ -236,6 +172,99 @@ func (s *Set) Contains(key uint64) bool {
 	return contains(key, tbl, slot, n)
 }
 
+// GetUsage returns Set capacity & usage.
+func (s *Set) GetUsage() (total, usage int) {
+	return len(s.getWritableTable()), int(s.getCnt())
+}
+
+// Remove removes key in Set.
+func (s *Set) Remove(key uint64) {
+	if !s.IsRunning() {
+		return
+	}
+	_ = s.tryRemove(key)
+}
+
+// Range calls f sequentially for each key and value present in the map.
+// If f returns false, range stops the iteration.
+//
+// Range does not necessarily correspond to any consistent snapshot of the Map's
+// contents: no key will be visited more than once, but if the value for any key
+// is stored or deleted concurrently, Range may reflect any mapping for that key
+// from any point during the Range call.
+//
+// Range may be O(N) with the number of elements in the map even if f returns
+// false after a constant number of calls.
+func (s *Set) Range(f func(key interface{}) bool) {
+
+	t0 := getTbl(s, 0)
+	t1 := getTbl(s, 1)
+
+	if t0 != nil {
+		for i := range t0 {
+			k := atomic.LoadUint64(&t0[i])
+			if k == 0 {
+				continue
+			}
+			if !f(k) {
+				break
+			}
+		}
+	}
+
+	if t1 != nil {
+		for i := range t1 {
+			k := atomic.LoadUint64(&t1[i])
+			if k == 0 {
+				continue
+			}
+			if !f(k) {
+				break
+			}
+		}
+	}
+
+	if s.hasZero() {
+		if !f(0) {
+			return
+		}
+	}
+}
+
+func (s *Set) expand(ri int) {
+	rp := atomic.LoadPointer(&s.cycle[ri])
+	src := *(*[]uint64)(rp)
+
+	n, cnt := len(src), 0
+	for i := range src {
+
+		if !s.IsRunning() {
+			return
+		}
+
+		if cnt >= 10 {
+			cnt = 0
+			runtime.Gosched() // Let potential 'func Add' run.
+		}
+		s.lock()
+		v := atomic.LoadUint64(&src[i])
+		if v != 0 {
+			err := s.tryInsert(v, true)
+			if err == ErrIsFull {
+				s.seal()
+				s.unlock()
+				return
+			}
+			cnt++
+		}
+		if i == n-1 { // Last one is finished.
+			atomic.StorePointer(&s.cycle[ri], unsafe.Pointer(nil))
+			s.unScale()
+		}
+		s.unlock()
+	}
+}
+
 var contains = containsGeneric
 
 func containsGeneric(key uint64, tbl []uint64, slot, n int) bool {
@@ -246,14 +275,6 @@ func containsGeneric(key uint64, tbl []uint64, slot, n int) bool {
 		}
 	}
 	return false
-}
-
-// Remove removes key in Set.
-func (s *Set) Remove(key uint64) {
-	if !s.IsRunning() {
-		return
-	}
-	_ = s.tryRemove(key)
 }
 
 func (s *Set) tryRemove(key uint64) (err error) {
@@ -327,26 +348,6 @@ restart:
 		j = free
 	}
 }
-
-// Remove removes key in set.
-//func (s *Set) Remove(key uint64) {
-//
-//	bkt := uint64(digest) & bktMask
-//
-//	for i := 0; i < neighbour && i+int(bkt) < bktCnt; i++ {
-//
-//		entry := atomic.LoadUint64(&s.cycle[bkt+uint64(i)])
-//		if entry>>digestShift&keyMask == uint64(digest) {
-//			deleted := entry >> deletedShift & deletedMask
-//			if deleted == 1 { // Deleted.
-//				return
-//			}
-//			a := uint64(1) << deletedShift
-//			entry = entry | a
-//			atomic.StoreUint64(&s.cycle[bkt+uint64(i)], entry)
-//		}
-//	}
-//}
 
 func (s *Set) tryInsert(key uint64, isLocked bool) (err error) {
 
@@ -452,9 +453,3 @@ func (s *Set) swap(start, slotCnt int, tbl []uint64, idx uint8) (int, uint8) {
 	}
 	return 0, swapFull
 }
-
-//
-// // List lists all keys in set.
-// func (s *Set) List() []uint64 {
-//
-// }

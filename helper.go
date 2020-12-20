@@ -57,6 +57,15 @@ func (s *Set) getTblSlotByIdx(idx uint8, key uint64) (tbl []uint64, slot int) {
 	return
 }
 
+func getTbl(s *Set, idx int) []uint64 {
+	p := atomic.LoadPointer(&s.cycle[idx])
+	if p == nil {
+		return nil
+	}
+
+	return *(*[]uint64)(p)
+}
+
 func nextPower2(n uint64) uint64 {
 	if n <= 1 {
 		return 1

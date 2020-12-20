@@ -1,9 +1,5 @@
 package u64
 
-import (
-	"github.com/templexxx/cpu"
-)
-
 var isAtomic256 = false
 
 var isAtomic256CPUs = map[string]struct{}{
@@ -16,20 +12,9 @@ var isAtomic256CPUs = map[string]struct{}{
 	"06_7DH": {}, "06_7EH": {},
 }
 
-func init() {
-	if _, ok := isAtomic256CPUs[cpu.X86.Signature]; ok {
-		isAtomic256 = true
-		contains = containsAtomic256
-	}
-}
-
-func containsAtomic256(key uint64, tbl []uint64, slot, n int) bool {
-	return containsGeneric(key, tbl, slot, n)
-	// if n < 8 {
-	// 	return containsGeneric(key, tbl, slot, n)
-	// }
-	// return containsAVX(key, &tbl[slot], n)
-}
-
+// TODO implement avx2 contains, in present, it's fast enough.
+// 1. VPBBROADCASTQ 8byte->32byte 1
+// 2. VPCMPEQQ	2
+// 3. VPTEST Y0, Y0	3
 //go:noescape
-func containsAVX(key uint64, tbl *uint64, n int) bool
+//func containsAVX(key uint64, tbl *uint64, n int) bool

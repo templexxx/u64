@@ -92,3 +92,5 @@ func TestConcurrentPerf(t *testing.T) {
 	t.Logf("total op: %d, cost: %dns, thread: %d;"+
 		"index search perf: %.2f ns/op, %.2f op/s", n*gn, end-start, gn, ops, iops)
 }
+
+// TODO range test (could steal from sync.Map)
