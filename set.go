@@ -21,31 +21,10 @@ import (
 )
 
 // neighbour is the hopscotch hash neighbourhood size.
-//
-// TODO testing the load factor
-// P is the probability a hopscotch hash table with load factor 0.75
-// and the neighborhood size 32 must be rehashed:
-// 3.81e-40 < P < 1e-4
+// 64 could reach high load factor(e.g. 0.9) and the performance is good.
 //
 // If there is no place to set key, try to resize to another bucket until meet MaxCap.
 const neighbour = 64
-
-// Set is unsigned 64-bit integer set.
-// Lock-free Write & Wait-free Read.
-type Set struct {
-	status uint64
-	// _padding here for avoiding false share.
-	// cycle which under the status won't be modified frequently, but read frequently.
-	//
-	// may don't need it because the the write operations aren't many, few cache miss is okay.
-	// remove it could save 128 bytes, it's attractive for application which want to save every bit.
-	// _padding [cpu.X86FalseSharingRange]byte
-
-	// cycle is the container of tables,
-	// it's made of two uint64 slices.
-	// only the one could be inserted at a certain time.
-	cycle [2]unsafe.Pointer
-}
 
 const (
 	// defaultMaxCap is the default maximum capacity of Set.
@@ -53,9 +32,19 @@ const (
 	// Start with a minCap, saving memory.
 	minCap = 2
 	// MaxCap is the maximum capacity of Set.
-	// The real max number of keys may be around 0.8~0.9 * MaxCap.
+	// The real max number of keys may be around 0.9 * MaxCap.
 	MaxCap = defaultMaxCap
 )
+
+// Set is unsigned 64-bit integer set.
+// Lock-free Write & Wait-free Read.
+type Set struct {
+	// status is a set of flags of Set, see status.go for more details.
+	status uint64
+	// cycle is the container of tables,
+	// only the one could be inserted at a certain time.
+	cycle [2]unsafe.Pointer
+}
 
 // New creates a new Set.
 // cap is the set capacity at the beginning,

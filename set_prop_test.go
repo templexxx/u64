@@ -5,6 +5,8 @@ import (
 )
 
 // TODO when reach the first full
+// TODO testing the load factor
+
 func TestMitFull(t *testing.T) {
 	n := 1024 * 1024
 	s := New(n)
