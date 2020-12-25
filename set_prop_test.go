@@ -13,14 +13,16 @@ func TestMain(m *testing.M) {
 
 	flag.Parse()
 
-	if IsPropEnabled() { // Only run properties testing when it is enabled.
+	rand.Seed(time.Now().UnixNano())
 
-		rand.Seed(time.Now().UnixNano())
-		os.Exit(m.Run())
-	}
+	os.Exit(m.Run())
 }
 
 func TestMitFull(t *testing.T) {
+
+	if !IsPropEnabled() {
+		t.Skip("skip testing, because it may take too long time")
+	}
 
 	start := 64 * 1024 // Too small is meaningless.
 	end := MaxCap
