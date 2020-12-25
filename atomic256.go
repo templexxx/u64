@@ -16,5 +16,5 @@ var isAtomic256CPUs = map[string]struct{}{
 // 1. VPBBROADCASTQ 8byte->32byte 1
 // 2. VPCMPEQQ	2
 // 3. VPTEST Y0, Y0	3
-//go:noescape
+// go:noescape
 //func containsAVX(key uint64, tbl *uint64, n int) bool

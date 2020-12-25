@@ -37,7 +37,7 @@ const (
 )
 
 // Set is unsigned 64-bit integer set.
-// Lock-free Write & Wait-free Read.
+// Providing Lock-free Write & Wait-free Read.
 type Set struct {
 	// status is a set of flags of Set, see status.go for more details.
 	status uint64
@@ -102,6 +102,8 @@ func (s *Set) Add(key uint64) error {
 	case ErrIsFull:
 		if s.isScaling() {
 			s.unlock()
+			// In practice, it's rare to have such fast adding.
+			// Which means the caller's speed if fast than 'sequential traverse'
 			return ErrAddTooFast
 		}
 
