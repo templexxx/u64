@@ -74,8 +74,5 @@ func TestSet_Remove(t *testing.T) {
 }
 
 // TODO test
-// 1. delete check deleted
-// 2. range
-// 3.
-
-// TODO range test (could steal from sync.Map)
+// 1. concurrent range (sync.Map)
+// 2. concurrent add delete, will dead lock?
