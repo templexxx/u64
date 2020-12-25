@@ -142,7 +142,7 @@ func (s *Set) Contains(key uint64) bool {
 	sa := atomic.LoadUint64(&s.status)
 
 	// 1. Search writable table first.
-	idx, tbl, slot := s.getTblSlot(sa, key)
+	idx, tbl, slot := s.getTblSlot(sa, key) // Redundancy codes(see func getPosition()), gaining better performance.
 	if tbl != nil {
 		slotCnt := len(tbl)
 		n := neighbour
@@ -163,15 +163,20 @@ func (s *Set) Contains(key uint64) bool {
 	}
 	next := idx ^ 1
 	tbl, slot = s.getTblSlotByIdx(next, key)
-	if tbl == nil {
-		return false
+	if tbl != nil {
+		slotCnt := len(tbl)
+		n := neighbour
+		if slot+neighbour >= slotCnt {
+			n = slotCnt - slot
+		}
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&tbl[slot+i])
+			if k == key {
+				return true
+			}
+		}
 	}
-	slotCnt := len(tbl)
-	n := neighbour
-	if slot+neighbour >= slotCnt {
-		n = slotCnt - slot
-	}
-	return contains(key, tbl, slot, n)
+	return false
 }
 
 // GetUsage returns Set capacity & usage.
@@ -267,16 +272,22 @@ func (s *Set) expand(ri int) {
 	}
 }
 
-var contains = containsGeneric
-
-func containsGeneric(key uint64, tbl []uint64, slot, n int) bool {
-	for i := 0; i < n; i++ {
-		k := atomic.LoadUint64(&tbl[slot+i])
-		if k == key {
-			return true
+// getPosition gets key's position in tbl if has.
+func getPosition(tbl []uint64, slot int, key uint64) (has bool, pos int) {
+	if tbl != nil {
+		slotCnt := len(tbl)
+		n := neighbour
+		if slot+neighbour >= slotCnt {
+			n = slotCnt - slot
+		}
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&tbl[slot+i])
+			if k == key {
+				return true, slot + i
+			}
 		}
 	}
-	return false
+	return false, 0
 }
 
 func (s *Set) tryRemove(key uint64) (err error) {
@@ -294,61 +305,26 @@ restart:
 		goto restart
 	}
 
-	if s.isSealed() {
-		return ErrIsSealed
-	}
-
 	if key == 0 {
 		s.delZero()
+		s.unlock()
 		return nil
 	}
 
-	idx := s.getWritableIdx()
-
-	p := atomic.LoadPointer(&s.cycle[idx])
-	tbl := *(*[]uint64)(p)
-	slotCnt := len(tbl)
-	mask := calcMask(uint32(slotCnt))
-
-	h := calcHash(idx, key)
-
-	slot := int(h & mask)
-
-	// 1. Ensure key is unique.
-	slotOff := neighbour // slotOff is the distance between avail slot from hashed slot.
-	for i := 0; i < neighbour && slot+i < slotCnt; i++ {
-		k := atomic.LoadUint64(&tbl[slot+i])
-		if k == key {
-			return nil // If already contains, do nothing.
-		}
-		if k == 0 {
-			if i < slotOff {
-				slotOff = i
-			}
-			continue // Go on trying to find the same key.
-		}
+	sa := atomic.LoadUint64(&s.status)
+	idx, tbl, slot := s.getTblSlot(sa, key)
+	has, pos := getPosition(tbl, slot, key)
+	if has {
+		atomic.StoreUint64(&tbl[pos], 0)
 	}
 
-	// 2. Try to Add within neighbour
-	if slotOff < neighbour {
-		atomic.StoreUint64(&tbl[slot+slotOff], key)
-		return nil
+	tbl, slot = s.getTblSlotByIdx(idx, key)
+	has, pos = getPosition(tbl, slot, key)
+	if has {
+		atomic.StoreUint64(&tbl[pos], 0)
 	}
-
-	// 3. Linear probe to find an empty slot and swap.
-	j := slot + neighbour
-	for { // Closer and closer.
-		free, status := s.swap(j, slotCnt, tbl, idx)
-		if status == swapFull {
-			return ErrIsFull
-		}
-
-		if free-slot < neighbour {
-			atomic.StoreUint64(&tbl[free], key)
-			return nil
-		}
-		j = free
-	}
+	s.unlock()
+	return
 }
 
 func (s *Set) tryInsert(key uint64, isLocked bool) (err error) {
