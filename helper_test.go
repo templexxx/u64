@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestCalcCap(t *testing.T) {
+	for i := 2; i <= MaxCap; i *= 2 {
+		if backToOriginCap(calcTableCap(i)) != i {
+			t.Fatal("calc cap mismatched")
+		}
+	}
+}
+
 func TestNextPower2(t *testing.T) {
 	for i := 0; i <= 1025; i++ {
 		p := nextPower2(uint64(i))
