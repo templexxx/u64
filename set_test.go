@@ -1,7 +1,6 @@
 package u64
 
 import (
-	"fmt"
 	"runtime"
 	"sync"
 	"testing"
@@ -9,45 +8,6 @@ import (
 
 	"github.com/templexxx/tsc"
 )
-
-func TestIndexSearchPerf(t *testing.T) {
-
-	n := 1024 * 1024
-	// m := make(map[uint64]struct{}, n)
-	s := New(n * 2)
-	exp := n
-	for i := 1; i < n+1; i++ {
-		err := s.Add(uint64(i))
-		if err != nil {
-			exp--
-		}
-		// m[uint64(i)] = struct{}{}
-	}
-
-	start := tsc.UnixNano()
-	has := 0
-	for i := 1; i < n+1; i++ {
-		if s.Contains(uint64(i)) {
-			has++
-		}
-		// if _, ok := m[uint64(i)]; ok {
-		// 	has++
-		// }
-	}
-	// for j := 0; j < 10; j++ {
-	// 	for i := 1; i < n+1; i++ {
-	// 		s.Contains(uint64(i))
-	// 	}
-	// }
-
-	if has != exp {
-		fmt.Println(s.getWritableIdx(), s.isScaling())
-		t.Fatal("contains mismatch", has, exp, n)
-	}
-	end := tsc.UnixNano()
-	ops := float64(end-start) / float64(exp)
-	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
-}
 
 func TestSet_AddZero(t *testing.T) {
 	s := New(0)
@@ -65,7 +25,7 @@ func TestSet_AddZero(t *testing.T) {
 
 func TestConcurrentPerf(t *testing.T) {
 	n := 1024 * 1024
-	s := New(n * 2)
+	s := New(n * 2) // Ensure there is enough space for Adding, avoiding scaling.
 	for i := 0; i < n; i++ {
 		err := s.Add(uint64(i))
 		if err != nil {
@@ -91,6 +51,34 @@ func TestConcurrentPerf(t *testing.T) {
 	iops := float64(n*gn) / (float64(end-start) / float64(time.Second))
 	t.Logf("total op: %d, cost: %dns, thread: %d;"+
 		"index search perf: %.2f ns/op, %.2f op/s", n*gn, end-start, gn, ops, iops)
+}
+
+func TestIndexSearchPerf(t *testing.T) {
+
+	n := 1024 * 1024
+	s := New(n * 2)
+	exp := n
+	for i := 1; i < n+1; i++ {
+		err := s.Add(uint64(i))
+		if err != nil {
+			exp--
+		}
+	}
+
+	start := tsc.UnixNano()
+	has := 0
+	for i := 1; i < n+1; i++ {
+		if s.Contains(uint64(i)) {
+			has++
+		}
+	}
+
+	if has != exp {
+		t.Fatal("contains mismatch", has, exp, n)
+	}
+	end := tsc.UnixNano()
+	ops := float64(end-start) / float64(exp)
+	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
 }
 
 // TODO range test (could steal from sync.Map)
