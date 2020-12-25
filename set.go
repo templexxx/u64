@@ -176,7 +176,7 @@ func (s *Set) Contains(key uint64) bool {
 
 // GetUsage returns Set capacity & usage.
 func (s *Set) GetUsage() (total, usage int) {
-	return len(s.getWritableTable()), int(s.getCnt())
+	return backToOriginCap(len(s.getWritableTable())), int(s.getCnt())
 }
 
 // Remove removes key in Set.

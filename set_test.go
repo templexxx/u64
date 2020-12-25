@@ -10,7 +10,7 @@ import (
 )
 
 func TestSet_AddZero(t *testing.T) {
-	s := New(0)
+	s := New(2)
 	if s.Contains(0) {
 		t.Fatal("should not have 0")
 	}
@@ -22,6 +22,38 @@ func TestSet_AddZero(t *testing.T) {
 		t.Fatal("should have 0")
 	}
 }
+
+func TestSet_Contains(t *testing.T) {
+
+	start := 2
+	for n := start; n <= MaxCap; n *= 32 {
+		keys := generateKeys(n/2, randomKey)
+		s := New(n)
+		for _, key := range keys {
+			err := s.Add(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !s.Contains(key) {
+				t.Fatal("should have key")
+			}
+		}
+		for _, key := range keys {
+			if !s.Contains(key) {
+				t.Fatal("should have key")
+			}
+		}
+		_, usage := s.GetUsage()
+		if usage != len(keys) {
+			t.Fatal("usage size mismatched")
+		}
+	}
+}
+
+// TODO test
+// 1. delete check deleted
+// 2. check not contain not has
+// 3.
 
 func TestConcurrentPerf(t *testing.T) {
 	n := 1024 * 1024
