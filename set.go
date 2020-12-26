@@ -15,6 +15,7 @@ package u64
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -83,6 +84,7 @@ var (
 	ErrAddTooFast = errors.New("add too fast") // Cycle being caught up.
 	ErrIsFull     = errors.New("set is full")
 	ErrIsSealed   = errors.New("is sealed")
+	ErrExisted    = errors.New("existed")
 )
 
 // Add adds key into Set.
@@ -101,7 +103,12 @@ func (s *Set) Add(key uint64) error {
 	switch err {
 
 	case nil:
-		s.addCnt()
+		if key != 0 {
+			s.addCnt()
+		}
+		s.unlock()
+		return nil
+	case ErrExisted:
 		s.unlock()
 		return nil
 
@@ -164,9 +171,6 @@ func (s *Set) Contains(key uint64) bool {
 	}
 
 	// 2. If is scaling, searching next table.
-	//if !s.isScaling() {
-	//	return false
-	//}
 	next := idx ^ 1
 	tbl, slot = s.getTblSlotByIdx(next, key)
 	if tbl != nil {
@@ -195,30 +199,34 @@ func (s *Set) Remove(key uint64) {
 	if !s.IsRunning() {
 		return
 	}
-	_ = s.tryRemove(key)
+	s.tryRemove(key)
 }
 
-// Range calls f sequentially for each key and value present in the map.
+// Range calls f sequentially for each key present in the Set.
 // If f returns false, range stops the iteration.
 //
-// Range does not necessarily correspond to any consistent snapshot of the Map's
+// Range does not necessarily correspond to any consistent snapshot of the Set's
 // contents: no key will be visited more than once, but if the value for any key
-// is stored or deleted concurrently, Range may reflect any mapping for that key
+// is Added or Removed concurrently, Range may reflect any mapping for that key
 // from any point during the Range call.
 //
-// Range may be O(N) with the number of elements in the map even if f returns
+// Range may be O(N) with the number of elements in the set even if f returns
 // false after a constant number of calls.
-func (s *Set) Range(f func(key interface{}) bool) {
+func (s *Set) Range(f func(key uint64) bool) {
 
-	t0 := getTbl(s, 0)
-	t1 := getTbl(s, 1)
+	widx := s.getWritableIdx()
+	wt := getTbl(s, int(widx))
 
-	if t0 != nil {
-		for i := range t0 {
-			k := atomic.LoadUint64(&t0[i])
+	next := widx ^ 1
+	t1 := getTbl(s, int(next))
+
+	if wt != nil {
+		for i := range wt {
+			k := atomic.LoadUint64(&wt[i])
 			if k == 0 {
 				continue
 			}
+
 			if !f(k) {
 				break
 			}
@@ -231,6 +239,22 @@ func (s *Set) Range(f func(key interface{}) bool) {
 			if k == 0 {
 				continue
 			}
+			if wt != nil {
+				slot := getSlot(widx, wt, k)
+				slotCnt := len(wt)
+				n := neighbour
+				if slot+neighbour >= slotCnt {
+					n = slotCnt - slot
+				}
+				for j := 0; j < n; j++ {
+					wk := atomic.LoadUint64(&wt[slot+j])
+					if k == wk {
+						fmt.Println(k)
+						continue
+					}
+				}
+			}
+
 			if !f(k) {
 				break
 			}
@@ -260,14 +284,21 @@ func (s *Set) expand(ri int) {
 			runtime.Gosched() // Let potential 'func Add' run.
 		}
 		s.lock()
-		v := atomic.LoadUint64(&src[i])
-		if v != 0 {
-			err := s.tryAdd(v, true)
+		k := atomic.LoadUint64(&src[i])
+		if k != 0 {
+			atomic.StoreUint64(&src[i], 0) // Remove before add, avoiding visited twice in Range.
+			err := s.tryAdd(k, true)
 			if err == ErrIsFull {
+				atomic.StoreUint64(&src[i], k) // Add back if failed.
 				s.seal()
 				s.unlock()
 				return
 			}
+
+			if err == ErrExisted {
+				s.delCnt()
+			}
+
 			cnt++
 		}
 		if i == n-1 { // Last one is finished.
@@ -296,13 +327,7 @@ func getPosition(tbl []uint64, slot int, key uint64) (has bool, pos int) {
 	return false, 0
 }
 
-func (s *Set) tryRemove(key uint64) (err error) {
-
-	defer func() {
-		if err == nil {
-			s.delCnt()
-		}
-	}()
+func (s *Set) tryRemove(key uint64) {
 
 restart:
 
@@ -313,20 +338,27 @@ restart:
 
 	if key == 0 {
 		s.delZero()
+		s.delCnt()
 		s.unlock()
-		return nil
+		return
 	}
 
 	idx, tbl, slot := s.getTblSlot(key)
 	has, pos := getPosition(tbl, slot, key)
 	if has {
 		atomic.StoreUint64(&tbl[pos], 0)
+		s.delCnt()
+		s.unlock()
+		return
 	}
 
 	tbl, slot = s.getTblSlotByIdx(idx, key)
 	has, pos = getPosition(tbl, slot, key)
 	if has {
 		atomic.StoreUint64(&tbl[pos], 0)
+		s.delCnt()
+		s.unlock()
+		return
 	}
 	s.unlock()
 	return
@@ -368,7 +400,7 @@ restart:
 	for i := 0; i < neighbour && slot+i < slotCnt; i++ {
 		k := atomic.LoadUint64(&tbl[slot+i])
 		if k == key {
-			return nil // If already contains, do nothing.
+			return ErrExisted // If already contains, do nothing.
 		}
 		if k == 0 {
 			if i < slotOff {

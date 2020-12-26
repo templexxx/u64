@@ -59,6 +59,12 @@ func (s *Set) getTblSlotByIdx(idx uint8, key uint64) (tbl []uint64, slot int) {
 	return
 }
 
+func getSlot(idx uint8, tbl []uint64, key uint64) int {
+	h := calcHash(idx, key)
+	slotCnt := len(tbl)
+	return int(h & (calcMask(uint32(slotCnt))))
+}
+
 func getTbl(s *Set, idx int) []uint64 {
 	p := atomic.LoadPointer(&s.cycle[idx])
 	if p == nil {

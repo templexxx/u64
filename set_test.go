@@ -1,8 +1,11 @@
 package u64
 
 import (
+	"math/rand"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestSet_AddZero(t *testing.T) {
@@ -126,6 +129,113 @@ func TestSet_UpdateConcurrent(t *testing.T) {
 	}
 }
 
+func TestSet_Range(t *testing.T) {
+	n := 1 << 12
+	s := New(n)
+
+	for i := 0; i < n; i++ {
+		err := s.Add(uint64(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seen := make(map[uint64]bool)
+	s.Range(func(k uint64) bool {
+		if seen[k] {
+			t.Fatalf("Range visited key %v twice", k)
+		}
+		seen[k] = true
+		return true
+	})
+	if len(seen) != n {
+		t.Logf("Range visited %v elements of %v-element Map", len(seen), n)
+	}
+}
+
+func TestSet_GetUsage(t *testing.T) {
+	n := 2048
+	s := New(n)
+	for j := 0; j < 16; j++ {
+		for i := 1; i < n; i++ {
+			err := s.Add(uint64(i))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	time.Sleep(time.Second) // Ensure expand finished.
+
+	_, usage := s.GetUsage()
+	if usage != n {
+		t.Fatal("usage mismatched", usage)
+	}
+}
+
+func TestConcurrentRange(t *testing.T) {
+	const cnt = 1 << 12
+
+	s := New(cnt)
+	for n := uint64(1); n <= cnt; n++ {
+		err := s.Add(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	defer func() {
+		close(done)
+		wg.Wait()
+	}()
+	for g := int64(runtime.GOMAXPROCS(0)); g > 0; g-- {
+		r := rand.New(rand.NewSource(g))
+		wg.Add(1)
+		go func(g int64) {
+			defer wg.Done()
+			for i := int64(0); ; i++ {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				for n := uint64(1); n < cnt; n++ {
+					if r.Int63n(cnt) == 0 {
+						err := s.Add(n)
+						if err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						s.Contains(n)
+					}
+				}
+			}
+		}(g)
+	}
+
+	iters := 1 << 10
+	if testing.Short() {
+		iters = 16
+	}
+	for n := iters; n > 0; n-- {
+		seen := make(map[uint64]bool, cnt)
+
+		s.Range(func(k uint64) bool {
+
+			if seen[k] {
+				t.Fatalf("Range visited key %v twice", k)
+			}
+			seen[k] = true
+			return true
+		})
+
+		if len(seen) != cnt {
+			t.Logf("Range visited %v elements of %v-element Map", len(seen), cnt)
+		}
+	}
+}
+
 // TODO test
-// 1. concurrent range (sync.Map)
 // 2. expand background
