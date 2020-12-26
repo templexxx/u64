@@ -129,9 +129,53 @@ func TestSet_UpdateConcurrent(t *testing.T) {
 	}
 }
 
+func TestSet_GetUsage(t *testing.T) {
+	n := 2048
+	s := New(n)
+	for j := 0; j < 16; j++ {
+		for i := 1; i < n; i++ {
+			err := s.Add(uint64(i))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	time.Sleep(time.Second) // Ensure expand finished.
+
+	_, usage := s.GetUsage()
+	if usage != n {
+		t.Fatal("usage mismatched", usage)
+	}
+}
+
 func TestSet_Range(t *testing.T) {
 	n := 1 << 12
-	s := New(n)
+	s := New(n * 4)
+
+	for i := 0; i < n; i++ {
+		err := s.Add(uint64(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seen := make(map[uint64]bool)
+	s.Range(func(k uint64) bool {
+		if seen[k] {
+			t.Fatalf("Range visited key %v twice", k)
+		}
+		seen[k] = true
+		return true
+	})
+	if len(seen) != n {
+		t.Fatalf("Range visited %v elements of %v-element Map", len(seen), n)
+	}
+}
+
+func TestSet_RangeWithExpand(t *testing.T) {
+	n := 1 << 13
+	s := New(n / 2) // Not enough capacity, must trigger expand.
 
 	for i := 0; i < n; i++ {
 		err := s.Add(uint64(i))
@@ -150,26 +194,6 @@ func TestSet_Range(t *testing.T) {
 	})
 	if len(seen) != n {
 		t.Logf("Range visited %v elements of %v-element Map", len(seen), n)
-	}
-}
-
-func TestSet_GetUsage(t *testing.T) {
-	n := 2048
-	s := New(n)
-	for j := 0; j < 16; j++ {
-		for i := 1; i < n; i++ {
-			err := s.Add(uint64(i))
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	time.Sleep(time.Second) // Ensure expand finished.
-
-	_, usage := s.GetUsage()
-	if usage != n {
-		t.Fatal("usage mismatched", usage)
 	}
 }
 
