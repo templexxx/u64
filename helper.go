@@ -40,8 +40,8 @@ func (s *Set) getWritableTable() []uint64 {
 }
 
 // getTblSlot gets writable table and slot
-func (s *Set) getTblSlot(sa, key uint64) (idx uint8, tbl []uint64, slot int) {
-	idx = getWritableIdxByStatus(sa)
+func (s *Set) getTblSlot(key uint64) (idx uint8, tbl []uint64, slot int) {
+	idx = getWritableIdxByStatus(atomic.LoadUint64(&s.status))
 	tbl, slot = s.getTblSlotByIdx(idx, key)
 	return
 }

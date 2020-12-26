@@ -1,7 +1,6 @@
 package u64
 
 import (
-	"sync/atomic"
 	"testing"
 )
 
@@ -38,6 +37,6 @@ func BenchmarkSet_getTblSlot(b *testing.B) {
 	s := New(1024)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _ = s.getTblSlot(atomic.LoadUint64(&s.status), uint64(i))
+		_, _, _ = s.getTblSlot(uint64(i))
 	}
 }

@@ -97,8 +97,14 @@ func (s *Set) Add(key uint64) error {
 		return ErrIsClosed
 	}
 
-	err := s.tryInsert(key, false)
+	err := s.tryAdd(key, false)
 	switch err {
+
+	case nil:
+		s.addCnt()
+		s.unlock()
+		return nil
+
 	case ErrIsFull:
 		if s.isScaling() {
 			s.unlock()
@@ -120,12 +126,14 @@ func (s *Set) Add(key uint64) error {
 		next := idx ^ 1
 		newTbl := make([]uint64, calcTableCap(oc*2))
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
-		s.setWritable(next)
 		s.scale()
-		_ = s.tryInsert(key, true) // First insert must be succeed.
+		s.setWritable(next)
+		_ = s.tryAdd(key, true) // First insert must be succeed.
 		go s.expand(int(idx))
+		s.addCnt()
 		s.unlock()
 		return nil
+
 	default:
 		s.unlock()
 		return err
@@ -139,10 +147,8 @@ func (s *Set) Contains(key uint64) bool {
 		return s.hasZero()
 	}
 
-	sa := atomic.LoadUint64(&s.status)
-
 	// 1. Search writable table first.
-	idx, tbl, slot := s.getTblSlot(sa, key) // Redundancy codes(see func getPosition()), gaining better performance.
+	idx, tbl, slot := s.getTblSlot(key) // Redundancy codes(see func getPosition()), gaining better performance.
 	if tbl != nil {
 		slotCnt := len(tbl)
 		n := neighbour
@@ -158,9 +164,9 @@ func (s *Set) Contains(key uint64) bool {
 	}
 
 	// 2. If is scaling, searching next table.
-	if !s.isScaling() {
-		return false
-	}
+	//if !s.isScaling() {
+	//	return false
+	//}
 	next := idx ^ 1
 	tbl, slot = s.getTblSlotByIdx(next, key)
 	if tbl != nil {
@@ -256,7 +262,7 @@ func (s *Set) expand(ri int) {
 		s.lock()
 		v := atomic.LoadUint64(&src[i])
 		if v != 0 {
-			err := s.tryInsert(v, true)
+			err := s.tryAdd(v, true)
 			if err == ErrIsFull {
 				s.seal()
 				s.unlock()
@@ -311,8 +317,7 @@ restart:
 		return nil
 	}
 
-	sa := atomic.LoadUint64(&s.status)
-	idx, tbl, slot := s.getTblSlot(sa, key)
+	idx, tbl, slot := s.getTblSlot(key)
 	has, pos := getPosition(tbl, slot, key)
 	if has {
 		atomic.StoreUint64(&tbl[pos], 0)
@@ -327,13 +332,7 @@ restart:
 	return
 }
 
-func (s *Set) tryInsert(key uint64, isLocked bool) (err error) {
-
-	defer func() {
-		if err == nil {
-			s.addCnt()
-		}
-	}()
+func (s *Set) tryAdd(key uint64, isLocked bool) (err error) {
 
 restart:
 

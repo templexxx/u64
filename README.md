@@ -37,6 +37,8 @@ usage.
 
 2. Only supports X86-64 platform.
 
+3. It's better to use only one goroutine to update Set(Add/Remove), one goroutine is enough fast, and could avoid unnecessary cost of spin.
+
 ## Other Set Implementations
 
 ### Tree
