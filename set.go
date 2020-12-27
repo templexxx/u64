@@ -171,6 +171,9 @@ func (s *Set) Contains(key uint64) bool {
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
+		//if containsAVX(key, &wt[slot], n) {
+		//	return true
+		//}
 		for i := 0; i < n; i++ {
 			k := atomic.LoadUint64(&wt[slot+i])
 			if k == key {
@@ -187,6 +190,9 @@ func (s *Set) Contains(key uint64) bool {
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
+		//if containsAVX(key, &nt[slot], n) {
+		//	return true
+		//}
 		for i := 0; i < n; i++ {
 			k := atomic.LoadUint64(&nt[slot+i])
 			if k == key {
