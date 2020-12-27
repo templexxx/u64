@@ -15,7 +15,6 @@ package u64
 
 import (
 	"errors"
-	"fmt"
 	"runtime"
 	"sync/atomic"
 	"unsafe"
@@ -191,7 +190,12 @@ func (s *Set) Contains(key uint64) bool {
 
 // GetUsage returns Set capacity & usage.
 func (s *Set) GetUsage() (total, usage int) {
-	return backToOriginCap(len(s.getWritableTable())), int(s.getCnt())
+	total = 0
+	tbl := s.getWritableTable()
+	if tbl != nil { // In case.
+		total = backToOriginCap(len(tbl))
+	}
+	return total, int(s.getCnt())
 }
 
 // Remove removes key in Set.
@@ -239,6 +243,7 @@ func (s *Set) Range(f func(key uint64) bool) {
 			if k == 0 {
 				continue
 			}
+			has := false
 			if wt != nil {
 				slot := getSlot(widx, wt, k)
 				slotCnt := len(wt)
@@ -249,10 +254,12 @@ func (s *Set) Range(f func(key uint64) bool) {
 				for j := 0; j < n; j++ {
 					wk := atomic.LoadUint64(&wt[slot+j])
 					if k == wk {
-						fmt.Println(k)
-						continue
+						has = true
 					}
 				}
+			}
+			if has {
+				continue
 			}
 
 			if !f(k) {
@@ -337,8 +344,7 @@ restart:
 	}
 
 	if key == 0 {
-		s.delZero()
-		s.delCnt()
+		s.removeZero()
 		s.unlock()
 		return
 	}

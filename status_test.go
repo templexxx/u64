@@ -5,6 +5,45 @@ import (
 	"testing"
 )
 
+func TestBitsOperator(t *testing.T) {
+	var x uint64 = 1
+	for i := 0; i < 64; i++ {
+		r := setBit(x, uint64(i))
+		if r != 1<<i|x {
+			t.Fatal("mismatched")
+		}
+		if !bitOne(r, uint64(i)) {
+			t.Fatal("should be one")
+		}
+		r = setBit(x, uint64(i)) // Should have no impact.
+		if r != 1<<i|x {
+			t.Fatal("mismatched")
+		}
+		if !bitOne(r, uint64(i)) {
+			t.Fatal("should be one")
+		}
+		x = r
+	}
+
+	for i := 63; i >= 0; i-- {
+		r := clrBit(x, uint64(i))
+		if r != 1<<i-1 {
+			t.Fatal("mismatched")
+		}
+		if bitOne(r, uint64(i)) {
+			t.Fatal("should not be one")
+		}
+		r = clrBit(x, uint64(i))
+		if r != 1<<i-1 {
+			t.Fatal("mismatched")
+		}
+		if bitOne(r, uint64(i)) {
+			t.Fatal("should not be one")
+		}
+		x = r
+	}
+}
+
 func TestSet_IsRunning(t *testing.T) {
 	s := New(0)
 	if !s.IsRunning() {
@@ -15,6 +54,10 @@ func TestSet_IsRunning(t *testing.T) {
 func TestSet_Close(t *testing.T) {
 	s := New(0)
 	s.Close()
+	if s.IsRunning() {
+		t.Fatal("should be closed")
+	}
+	s.close()
 	if s.IsRunning() {
 		t.Fatal("should be closed")
 	}
@@ -92,7 +135,7 @@ func TestSet_Zero(t *testing.T) {
 	if !s.hasZero() {
 		t.Fatal("should have zero")
 	}
-	s.delZero()
+	s.removeZero()
 	if s.hasZero() {
 		t.Fatal("should not have zero")
 	}
