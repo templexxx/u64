@@ -4,10 +4,6 @@ import (
 	"sync/atomic"
 )
 
-// TODO shrink should be manually, because it's heavy & the last_add is too slow because need to get timestamp
-// TODO add is_scaling flag
-// TODO remove last_add
-
 // status struct(uint64):
 // 64                                                                                  58
 // <------------------------------------------------------------------------------------

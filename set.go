@@ -299,7 +299,6 @@ func (s *Set) expand(ri int) {
 				s.unlock()
 				return
 			}
-			//atomic.StoreUint64(&src[i], 0) // Remove before add, avoiding visited twice in Range.
 
 			if err == ErrExisted {
 				s.delCnt()
