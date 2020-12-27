@@ -28,8 +28,6 @@ Blazing Fast Unsigned 64-bit Integer Set in Go.
 
 [Reference](https://rigtorp.se/isatomic/)
 
-Using TSC register to get timestamp
-
 ## Limitation
 
 1. The maximum size of set is 32Mi, but big enough for most cases. I set the limitation for avoiding unexpected memory
