@@ -153,16 +153,21 @@ func (s *Set) Contains(key uint64) bool {
 		return s.hasZero()
 	}
 
+	widx := s.getWritableIdx()
+	next := widx ^ 1
+	wt := getTbl(s, int(widx))
+	nt := getTbl(s, int(next))
+
 	// 1. Search writable table first.
-	idx, tbl, slot := s.getTblSlot(key) // Redundancy codes(see func getPosition()), gaining better performance.
-	if tbl != nil {
-		slotCnt := len(tbl)
+	slot := getSlot(widx, wt, key)
+	if wt != nil {
+		slotCnt := len(wt)
 		n := neighbour
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
 		for i := 0; i < n; i++ {
-			k := atomic.LoadUint64(&tbl[slot+i])
+			k := atomic.LoadUint64(&wt[slot+i])
 			if k == key {
 				return true
 			}
@@ -170,16 +175,15 @@ func (s *Set) Contains(key uint64) bool {
 	}
 
 	// 2. If is scaling, searching next table.
-	next := idx ^ 1
-	tbl, slot = s.getTblSlotByIdx(next, key)
-	if tbl != nil {
-		slotCnt := len(tbl)
+	slot = getSlot(next, nt, key)
+	if nt != nil {
+		slotCnt := len(nt)
 		n := neighbour
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
 		for i := 0; i < n; i++ {
-			k := atomic.LoadUint64(&tbl[slot+i])
+			k := atomic.LoadUint64(&nt[slot+i])
 			if k == key {
 				return true
 			}
