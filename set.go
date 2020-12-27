@@ -293,14 +293,13 @@ func (s *Set) expand(ri int) {
 		s.lock()
 		k := atomic.LoadUint64(&src[i])
 		if k != 0 {
-			atomic.StoreUint64(&src[i], 0) // Remove before add, avoiding visited twice in Range.
 			err := s.tryAdd(k, true)
 			if err == ErrIsFull {
-				atomic.StoreUint64(&src[i], k) // Add back if failed.
 				s.seal()
 				s.unlock()
 				return
 			}
+			atomic.StoreUint64(&src[i], 0) // Remove before add, avoiding visited twice in Range.
 
 			if err == ErrExisted {
 				s.delCnt()

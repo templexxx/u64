@@ -24,7 +24,7 @@ func TestSet_Contains(t *testing.T) {
 
 	start := 2
 	for n := start; n <= MaxCap; n *= 32 {
-		keys := generateKeys(n/2, randomKey)
+		keys := generateKeys(n, randomKey)
 		s := New(n)
 
 		wg := new(sync.WaitGroup) // Using sync.WaitGroup for ensuring the order.
