@@ -52,7 +52,11 @@ type Set struct {
 // Set will grow if no bucket to add until meet MaxCap.
 //
 // If cap is zero, using minCap.
-func New(cap int) *Set {
+func New(cap int) (*Set, error) {
+
+	if !isAtomic256 {
+		return nil, ErrUnsupported
+	}
 
 	cap = int(nextPower2(uint64(cap)))
 
@@ -68,7 +72,7 @@ func New(cap int) *Set {
 	return &Set{
 		status: createStatus(),
 		cycle:  [2]unsafe.Pointer{unsafe.Pointer(&bkt0)},
-	}
+	}, nil
 }
 
 // Close closes Set and release the resource.
@@ -79,11 +83,12 @@ func (s *Set) Close() {
 }
 
 var (
-	ErrIsClosed   = errors.New("is closed")
-	ErrAddTooFast = errors.New("add too fast") // Cycle being caught up.
-	ErrIsFull     = errors.New("set is full")
-	ErrIsSealed   = errors.New("is sealed")
-	ErrExisted    = errors.New("existed")
+	ErrUnsupported = errors.New("unsupported platform, need AVX atomic supports")
+	ErrIsClosed    = errors.New("is closed")
+	ErrAddTooFast  = errors.New("add too fast") // Cycle being caught up.
+	ErrIsFull      = errors.New("set is full")
+	ErrIsSealed    = errors.New("is sealed")
+	ErrExisted     = errors.New("existed")
 )
 
 // Add adds key into Set.

@@ -7,7 +7,10 @@ import (
 )
 
 func TestSet_AddZero(t *testing.T) {
-	s := New(2)
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+	s, _ := New(2)
 	if s.Contains(0) {
 		t.Fatal("should not have 0")
 	}
@@ -22,10 +25,14 @@ func TestSet_AddZero(t *testing.T) {
 
 func TestSet_Contains(t *testing.T) {
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	start := 2
 	for n := start; n <= MaxCap; n *= 32 {
 		keys := generateKeys(n, randomKey)
-		s := New(n)
+		s, _ := New(n)
 
 		wg := new(sync.WaitGroup) // Using sync.WaitGroup for ensuring the order.
 		wg.Add(1)
@@ -53,10 +60,14 @@ func TestSet_Contains(t *testing.T) {
 
 func TestSet_Remove(t *testing.T) {
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	start := 2
 	for n := start; n <= MaxCap; n *= 32 {
 		keys := generateKeys(n/2, randomKey)
-		s := New(n)
+		s, _ := New(n)
 		for _, key := range keys {
 			err := s.Add(key)
 			if err != nil {
@@ -82,8 +93,12 @@ func TestSet_Remove(t *testing.T) {
 // Add & Remove concurrently, checking dead lock or not.
 func TestSet_UpdateConcurrent(t *testing.T) {
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	n := 1024 * 4
-	s := New(n)
+	s, _ := New(n)
 	for i := 0; i < 1024; i++ {
 		err := s.Add(uint64(i))
 		if err != nil {
@@ -123,8 +138,13 @@ func TestSet_UpdateConcurrent(t *testing.T) {
 }
 
 func TestSet_GetUsage(t *testing.T) {
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	n := 2048
-	s := New(n * 4)
+	s, _ := New(n * 4)
 	for j := 0; j < 16; j++ {
 		for i := 1; i < n+1; i++ {
 			err := s.Add(uint64(i))
@@ -152,8 +172,13 @@ func TestSet_GetUsage(t *testing.T) {
 }
 
 func TestSet_Range(t *testing.T) {
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	n := 1 << 12
-	s := New(n * 4)
+	s, _ := New(n * 4)
 
 	for i := 1; i <= n; i++ {
 		err := s.Add(uint64(i))
@@ -176,8 +201,13 @@ func TestSet_Range(t *testing.T) {
 }
 
 func TestSet_RangeWithExpand(t *testing.T) {
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	cnt := 1 << 13
-	s := New(cnt / 2) // Not enough capacity, must trigger expand.
+	s, _ := New(cnt / 2) // Not enough capacity, must trigger expand.
 
 	for i := 1; i <= cnt; i++ {
 		err := s.Add(uint64(i))
@@ -202,9 +232,14 @@ func TestSet_RangeWithExpand(t *testing.T) {
 }
 
 func TestConcurrentRange(t *testing.T) {
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	const cnt = 1 << 12
 
-	s := New(cnt)
+	s, _ := New(cnt)
 	for n := uint64(1); n <= cnt; n++ {
 		err := s.Add(n)
 		if err != nil {

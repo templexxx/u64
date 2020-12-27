@@ -34,7 +34,15 @@ func slowNextPower2(n uint64) uint64 {
 }
 
 func BenchmarkSet_getTblSlot(b *testing.B) {
-	s := New(1024)
+
+	if !isAtomic256 {
+		b.Skip(ErrUnsupported.Error())
+	}
+
+	s, err := New(1024)
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _, _ = s.getTblSlot(uint64(i))

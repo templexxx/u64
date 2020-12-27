@@ -1,3 +1,7 @@
+github.com/templexxx/cpu v0.0.7 h1:pUEZn8JBy/w5yzdYWgx+0m0xL9uk6j4K91C5kOViAzo=
+github.com/templexxx/cpu v0.0.7/go.mod h1:w7Tb+7qgcAlIyX4NhLuDKt78AHA5SzPmq0Wj6HiEnnk=
+github.com/templexxx/cpu v0.0.8-0.20201106075209-6651b1c9ec29 h1:S1lKKmwUVCEWWPSh1pTLB78vZ3B9XrpGMydC+qpXOjg=
+github.com/templexxx/cpu v0.0.8-0.20201106075209-6651b1c9ec29/go.mod h1:w7Tb+7qgcAlIyX4NhLuDKt78AHA5SzPmq0Wj6HiEnnk=
 github.com/templexxx/xxh3 v0.0.2 h1:70x4T+4d23qF+iOGUOXrF7ldLII0ArRVUSF8ZYpLw50=
 github.com/templexxx/xxh3 v0.0.2/go.mod h1:tn1iRAox+IQhDhTR+oUthjRQeoria9525zokqi62axg=
 golang.org/x/sys v0.0.0-20200727154430-2d971f7391a4 h1:gtF+PUC1CD1a9ocwQHbVNXuTp6RQsAYt6tpi6zjT81Y=

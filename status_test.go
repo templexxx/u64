@@ -45,14 +45,24 @@ func TestBitsOperator(t *testing.T) {
 }
 
 func TestSet_IsRunning(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	if !s.IsRunning() {
 		t.Fatal("should be running")
 	}
 }
 
 func TestSet_Close(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	s.Close()
 	if s.IsRunning() {
 		t.Fatal("should be closed")
@@ -64,7 +74,12 @@ func TestSet_Close(t *testing.T) {
 }
 
 func TestCreateStatusWritable(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	if s.getWritableIdx() != 0 {
 		t.Fatal("writable table mismatched")
 	}
@@ -72,7 +87,11 @@ func TestCreateStatusWritable(t *testing.T) {
 
 func TestSetWritable(t *testing.T) {
 
-	s := New(0)
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	s.setWritable(1)
 	if s.getWritableIdx() != 1 {
 		t.Fatal("writable table mismatched")
@@ -84,7 +103,12 @@ func TestSetWritable(t *testing.T) {
 }
 
 func TestSetLock(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	if !s.lock() {
 		t.Fatal("lock should be succeed")
 	}
@@ -107,7 +131,12 @@ func TestSetLock(t *testing.T) {
 }
 
 func TestSet_Seal(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	s.seal()
 	if !s.isSealed() {
 		t.Fatal("should be sealed")
@@ -115,7 +144,12 @@ func TestSet_Seal(t *testing.T) {
 }
 
 func TestSet_Scale(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	s.scale()
 	if !s.isScaling() {
 		t.Fatal("should be scaling")
@@ -127,7 +161,12 @@ func TestSet_Scale(t *testing.T) {
 }
 
 func TestSet_Zero(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	if s.hasZero() {
 		t.Fatal("should not have zero")
 	}
@@ -142,7 +181,12 @@ func TestSet_Zero(t *testing.T) {
 }
 
 func TestSet_Cnt(t *testing.T) {
-	s := New(0)
+
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
+	s, _ := New(0)
 	for i := 0; i < 1024; i++ {
 		if s.getCnt() != uint64(i) {
 			t.Fatal("add count mismatch")

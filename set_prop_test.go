@@ -26,6 +26,10 @@ func TestMitFull(t *testing.T) {
 		t.Skip("skip testing, because it may take too long time")
 	}
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	start := 64 * 1024 // Too small is meaningless.
 	end := MaxCap
 
@@ -50,8 +54,15 @@ func TestContainsPerfConcurrent(t *testing.T) {
 		t.Skip("skip perf testing")
 	}
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	n := 1024 * 1024
-	s := New(n * 2) // Ensure there is enough space for Adding, avoiding scaling.
+	s, err := New(n * 2) // Ensure there is enough space for Adding, avoiding scaling.
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < n; i++ {
 		err := s.Add(uint64(i))
 		if err != nil {
@@ -85,8 +96,15 @@ func TestContainsPerf(t *testing.T) {
 		t.Skip("skip perf testing")
 	}
 
+	if !isAtomic256 {
+		t.Skip(ErrUnsupported.Error())
+	}
+
 	n := 1024 * 1024
-	s := New(n * 2)
+	s, err := New(n * 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	exp := n
 	for i := 1; i < n+1; i++ {
 		err := s.Add(uint64(i))
@@ -112,7 +130,8 @@ func TestContainsPerf(t *testing.T) {
 }
 
 func testMitFull(cnt, keyType int) int {
-	s := New(cnt)
+	s, _ := New(cnt)
+
 	s.scale()
 	keys := generateKeys(cnt, keyType)
 	for i, key := range keys {
