@@ -155,8 +155,8 @@ func generateKeys(cnt, keyType int) []uint64 {
 	}
 	switch keyType {
 	case randomKey:
-		kk := rand.Perm(cnt)
-		for i := range kk {
+		kk := rand.Perm(cnt * 4)
+		for i := range keys {
 			keys[i] = uint64(kk[i])
 		}
 		return keys

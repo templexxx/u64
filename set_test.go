@@ -254,7 +254,6 @@ func TestConcurrentRange(t *testing.T) {
 		wg.Wait()
 	}()
 	for g := int64(runtime.GOMAXPROCS(0)); g > 0; g-- {
-		//r := rand.New(rand.NewSource(g))
 		wg.Add(1)
 		go func(g int64) {
 			defer wg.Done()
