@@ -134,10 +134,10 @@ func (s *Set) Add(key uint64) error {
 			return ErrIsFull // Already MaxCap.
 		}
 
+		s.scale()
 		next := idx ^ 1
 		newTbl := make([]uint64, calcTableCap(oc*2))
 		atomic.StorePointer(&s.cycle[next], unsafe.Pointer(&newTbl))
-		s.scale()
 		s.setWritable(next)
 		_ = s.tryAdd(key, true) // First insert must be succeed.
 		go s.expand(int(idx))
@@ -235,7 +235,8 @@ func (s *Set) Range(f func(key uint64) bool) {
 	nt := getTbl(s, int(next))
 
 	if wt != nil {
-		for i := range wt {
+		for i := len(wt) - 1; i >= 0; i-- { // DESC for avoiding visiting the same key twice caused by swap in Add process.
+
 			k := atomic.LoadUint64(&wt[i])
 			if k == 0 {
 				continue
@@ -248,37 +249,37 @@ func (s *Set) Range(f func(key uint64) bool) {
 	}
 
 	if nt != nil {
-		// for i := range nt {
-		// 	k := atomic.LoadUint64(&nt[i])
-		// 	if k == 0 {
-		// 		continue
-		// 	}
-		//
-		// 	if wt != nil {
-		// 		slot := getSlot(widx, wt, k)
-		// 		slotCnt := len(wt)
-		// 		n := neighbour
-		// 		if slot+neighbour >= slotCnt {
-		// 			n = slotCnt - slot
-		// 		}
-		//
-		// 		has := false
-		// 		for j := 0; j < n; j++ {
-		// 			wk := atomic.LoadUint64(&wt[slot+j])
-		// 			if k == wk {
-		// 				has = true
-		// 				break
-		// 			}
-		// 		}
-		// 		if has {
-		// 			continue
-		// 		}
-		// 	}
-		//
-		// 	if !f(k) {
-		// 		break
-		// 	}
-		// }
+		for i := len(nt) - 1; i >= 0; i-- {
+			k := atomic.LoadUint64(&nt[i])
+			if k == 0 {
+				continue
+			}
+
+			if wt != nil {
+				slot := getSlot(widx, wt, k)
+				slotCnt := len(wt)
+				n := neighbour
+				if slot+neighbour >= slotCnt {
+					n = slotCnt - slot
+				}
+
+				has := false
+				for j := 0; j < n; j++ {
+					wk := atomic.LoadUint64(&wt[slot+j])
+					if k == wk {
+						has = true
+						break
+					}
+				}
+				if has {
+					continue
+				}
+			}
+
+			if !f(k) {
+				break
+			}
+		}
 	}
 
 	if s.hasZero() {
@@ -303,7 +304,13 @@ func (s *Set) expand(ri int) {
 			cnt = 0
 			runtime.Gosched() // Let potential 'func Add' run.
 		}
-		s.lock()
+
+	restart:
+		if !s.lock() {
+			pause()
+			goto restart
+		}
+
 		k := atomic.LoadUint64(&src[i])
 		if k != 0 {
 			err := s.tryAdd(k, true)
@@ -322,6 +329,8 @@ func (s *Set) expand(ri int) {
 		if i == n-1 { // Last one is finished.
 			atomic.StorePointer(&s.cycle[ri], unsafe.Pointer(nil))
 			s.unScale()
+			s.unlock()
+			return
 		}
 		s.unlock()
 	}
@@ -402,32 +411,29 @@ restart:
 	}
 
 	idx := s.getWritableIdx()
+	tbl := getTbl(s, int(idx))
 
-	p := atomic.LoadPointer(&s.cycle[idx])
-	tbl := *(*[]uint64)(p)
-	slotCnt := len(tbl)
-	mask := calcMask(uint32(slotCnt))
-
-	h := calcHash(idx, key)
-
-	slot := int(h & mask)
-
-	// 1. Ensure key is unique.
+	// 1. Ensure key is unique. And try to find free slot within neighbourhood.
 	slotOff := neighbour // slotOff is the distance between avail slot from hashed slot.
-	for i := 0; i < neighbour && slot+i < slotCnt; i++ {
-		k := atomic.LoadUint64(&tbl[slot+i])
-		if k == key {
-			return ErrExisted // If already contains, do nothing.
+	slot := getSlot(idx, tbl, key)
+	if tbl != nil {
+		slotCnt := len(tbl)
+		n := neighbour
+		if slot+neighbour >= slotCnt {
+			n = slotCnt - slot
 		}
-		if k == 0 {
-			if i < slotOff {
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&tbl[slot+i])
+			if k == key {
+				return ErrExisted
+			}
+			if k == 0 && i < slotOff {
 				slotOff = i
 			}
-			continue // Go on trying to find the same key.
 		}
 	}
 
-	// 2. Try to Add within neighbour
+	// 2. Try to Add within neighbour.
 	if slotOff < neighbour {
 		atomic.StoreUint64(&tbl[slot+slotOff], key)
 		return nil
@@ -436,7 +442,7 @@ restart:
 	// 3. Linear probe to find an empty slot and swap.
 	j := slot + neighbour
 	for { // Closer and closer.
-		free, status := s.swap(j, slotCnt, tbl, idx)
+		free, status := s.swap(j, len(tbl), tbl, idx)
 		if status == swapFull {
 			return ErrIsFull
 		}
@@ -469,8 +475,8 @@ func (s *Set) swap(start, slotCnt int, tbl []uint64, idx uint8) (int, uint8) {
 				k := atomic.LoadUint64(&tbl[j])
 				slot := int(calcHash(idx, k) & mask)
 				if i-slot < neighbour {
-					atomic.StoreUint64(&tbl[i], k)
 					atomic.StoreUint64(&tbl[j], 0)
+					atomic.StoreUint64(&tbl[i], k)
 					return j, swapOK
 				}
 			}

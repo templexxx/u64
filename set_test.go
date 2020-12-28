@@ -216,7 +216,7 @@ func TestSet_RangeWithExpand(t *testing.T) {
 		}
 	}
 
-	iters := 16
+	iters := 1024
 	for n := iters; n > 0; n-- {
 		seen := make(map[uint64]bool, cnt)
 
