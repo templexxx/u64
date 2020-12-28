@@ -24,3 +24,10 @@ func init() {
 
 //go:noescape
 func containsAVX(key uint64, tbl *uint64, n int) (has bool)
+
+func alignSize(n int64, align int64) int64 {
+	return (n + align - 1) &^ (align - 1)
+}
+
+//go:noescape
+func alignTo(n int64) int64

@@ -201,24 +201,3 @@ func TestSet_Cnt(t *testing.T) {
 		s.delCnt()
 	}
 }
-
-func TestAlignSize(t *testing.T) {
-	var align int64 = 64
-	var i int64
-	for i = 1; i <= align; i++ {
-		n := alignSize(i, align)
-		if n != align {
-			t.Fatal("align mismatch", n, i)
-		}
-	}
-	for i = align + 1; i < align*2; i++ {
-		n := alignSize(i, align)
-		if n != align*2 {
-			t.Fatal("align mismatch")
-		}
-	}
-}
-
-func alignSize(n int64, align int64) int64 {
-	return (n + align - 1) &^ (align - 1)
-}

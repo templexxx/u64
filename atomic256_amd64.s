@@ -3,7 +3,18 @@
 #define left BX
 #define key  R8
 #define tbl  DI
+#define atbl R11
 #define keys Y0
+
+
+TEXT ·alignTo(SB), NOSPLIT, $0
+    MOVQ n+0(FP), R8
+    ADDQ $63, R8
+    MOVQ $63, R9
+    NOTQ R9
+    ANDQ R9, R8
+    MOVQ R8, r+8(FP)
+    RET
 
 // func containsAVX(key uint64, tbl *uint64, n int) bool
 TEXT ·containsAVX(SB), NOSPLIT, $0

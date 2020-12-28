@@ -15,3 +15,26 @@ func TestContainsAVX2(t *testing.T) {
 	}
 
 }
+
+func TestAlignSize(t *testing.T) {
+	var align int64 = 64
+	var i int64
+	for i = 1; i <= align; i++ {
+		n := alignSize(i, align)
+		if n != align {
+			t.Fatal("align mismatch", n, i)
+		}
+		if n != alignTo(i) {
+			t.Fatal("alignTo mismatch", alignTo(i), n, i)
+		}
+	}
+	for i = align + 1; i < align*2; i++ {
+		n := alignSize(i, align)
+		if n != align*2 {
+			t.Fatal("align mismatch")
+		}
+		if n != alignTo(i) {
+			t.Fatal("alignTo mismatch")
+		}
+	}
+}
