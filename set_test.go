@@ -223,7 +223,7 @@ func TestSet_RangeWithExpand(t *testing.T) {
 		s.Range(func(k uint64) bool {
 
 			if seen[k] {
-				t.Logf("Range visited key %v twice", k)
+				t.Fatalf("Range visited key %v twice", k)
 			}
 			seen[k] = true
 			return true
@@ -283,7 +283,7 @@ func TestConcurrentRange(t *testing.T) {
 		s.Range(func(k uint64) bool {
 
 			if seen[k] {
-				t.Logf("Range visited key %v twice", k)
+				t.Fatalf("Range visited key %v twice", k)
 			}
 			seen[k] = true
 			return true

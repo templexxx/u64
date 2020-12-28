@@ -18,6 +18,8 @@ func init() {
 	if _, ok := atomic256CPUs[cpu.X86.Signature]; ok {
 		isAtomic256 = true
 	}
+	// TODO after tuning avx version faster
+	isAtomic256 = true
 }
 
 //go:noescape

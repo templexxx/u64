@@ -54,9 +54,9 @@ type Set struct {
 // If cap is zero, using minCap.
 func New(cap int) (*Set, error) {
 
-	if !isAtomic256 {
-		return nil, ErrUnsupported
-	}
+	// if !isAtomic256 {
+	// 	return nil, ErrUnsupported
+	// }
 
 	cap = int(nextPower2(uint64(cap)))
 
@@ -171,15 +171,12 @@ func (s *Set) Contains(key uint64) bool {
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
-		if containsAVX(key, &wt[slot], n) {
-			return true
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&wt[slot+i])
+			if k == key {
+				return true
+			}
 		}
-		// for i := 0; i < n; i++ {
-		// 	k := atomic.LoadUint64(&wt[slot+i])
-		// 	if k == key {
-		// 		return true
-		// 	}
-		// }
 	}
 
 	// 2. If is scaling, searching next table.
@@ -190,15 +187,13 @@ func (s *Set) Contains(key uint64) bool {
 		if slot+neighbour >= slotCnt {
 			n = slotCnt - slot
 		}
-		if containsAVX(key, &nt[slot], n) {
-			return true
+
+		for i := 0; i < n; i++ {
+			k := atomic.LoadUint64(&nt[slot+i])
+			if k == key {
+				return true
+			}
 		}
-		// for i := 0; i < n; i++ {
-		// 	k := atomic.LoadUint64(&nt[slot+i])
-		// 	if k == key {
-		// 		return true
-		// 	}
-		// }
 	}
 	return false
 }
@@ -237,7 +232,7 @@ func (s *Set) Range(f func(key uint64) bool) {
 	wt := getTbl(s, int(widx))
 
 	next := widx ^ 1
-	t1 := getTbl(s, int(next))
+	nt := getTbl(s, int(next))
 
 	if wt != nil {
 		for i := range wt {
@@ -252,35 +247,38 @@ func (s *Set) Range(f func(key uint64) bool) {
 		}
 	}
 
-	if t1 != nil {
-		for i := range t1 {
-			k := atomic.LoadUint64(&t1[i])
-			if k == 0 {
-				continue
-			}
-			has := false
-			if wt != nil {
-				slot := getSlot(widx, wt, k)
-				slotCnt := len(wt)
-				n := neighbour
-				if slot+neighbour >= slotCnt {
-					n = slotCnt - slot
-				}
-				for j := 0; j < n; j++ {
-					wk := atomic.LoadUint64(&wt[slot+j])
-					if k == wk {
-						has = true
-					}
-				}
-			}
-			if has {
-				continue
-			}
-
-			if !f(k) {
-				break
-			}
-		}
+	if nt != nil {
+		// for i := range nt {
+		// 	k := atomic.LoadUint64(&nt[i])
+		// 	if k == 0 {
+		// 		continue
+		// 	}
+		//
+		// 	if wt != nil {
+		// 		slot := getSlot(widx, wt, k)
+		// 		slotCnt := len(wt)
+		// 		n := neighbour
+		// 		if slot+neighbour >= slotCnt {
+		// 			n = slotCnt - slot
+		// 		}
+		//
+		// 		has := false
+		// 		for j := 0; j < n; j++ {
+		// 			wk := atomic.LoadUint64(&wt[slot+j])
+		// 			if k == wk {
+		// 				has = true
+		// 				break
+		// 			}
+		// 		}
+		// 		if has {
+		// 			continue
+		// 		}
+		// 	}
+		//
+		// 	if !f(k) {
+		// 		break
+		// 	}
+		// }
 	}
 
 	if s.hasZero() {
