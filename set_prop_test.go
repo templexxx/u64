@@ -78,7 +78,7 @@ func TestContainsPerfConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < n; j++ {
-				_ = s.Contains(uint64(j))
+				_ = s.Contains(uint64(j)) // TODO Should use different order, in present, cache impact a lot.
 			}
 		}()
 	}
