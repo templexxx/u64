@@ -17,7 +17,7 @@ func TestContainsAVX2(t *testing.T) {
 }
 
 func TestAlignSize(t *testing.T) {
-	var align int64 = 64
+	var align int64 = 32
 	var i int64
 	for i = 1; i <= align; i++ {
 		n := alignSize(i, align)
