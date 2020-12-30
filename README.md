@@ -6,6 +6,9 @@ Blazing Fast Unsigned 64-bit Integer Set in Go.
 >
 >   Read Optimized: 
 >   Read is wait-free and Cache-friendly, which means only needs few atomic read sequentially.
+>   
+> 
+>       Read could reach 500millions/second in a 20 logical core CPU.
 >
 >- **Low Overhead**
 >
