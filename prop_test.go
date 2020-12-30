@@ -87,7 +87,7 @@ func TestContainsPerfConcurrent(t *testing.T) {
 	ops := float64(end-start) / float64(n*gn)
 	iops := float64(n*gn) / (float64(end-start) / float64(time.Second))
 	t.Logf("total op: %d, cost: %dns, thread: %d;"+
-		"index search perf: %.2f ns/op, %.2f op/s", n*gn, end-start, gn, ops, iops)
+		"contains perf: %.2f ns/op, %.2f op/s", n*gn, end-start, gn, ops, iops)
 }
 
 func TestContainsPerf(t *testing.T) {
@@ -126,7 +126,7 @@ func TestContainsPerf(t *testing.T) {
 	}
 	end := time.Now().UnixNano()
 	ops := float64(end-start) / float64(exp)
-	t.Logf("index search perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
+	t.Logf("contains perf: %.2f ns/op, total: %d, failed: %d, ok rate: %.8f", ops, n, n-exp, float64(exp)/float64(n))
 }
 
 func testMitFull(cnt, keyType int) int {
